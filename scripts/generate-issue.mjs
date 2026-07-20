@@ -469,7 +469,7 @@ function footer() {
 }
 
 function anchorBlock(s) {
-  const sources = s.sources.map(src => `<span class="pill">[${src.name}]</span>`).join(" ");
+  const sources = s.sources.map(src => `<a href="${src.url}" target="_blank" rel="noopener" class="pill">[${src.name}]</a>`).join(" ");
   return `<div class="story anchor-story">
     <div class="tag">[ ${s.section} &middot; ${sectionLabel(s.section).toUpperCase()} &middot; THE ANCHOR ]</div>
     <h2>${s.headline}</h2>
@@ -482,7 +482,7 @@ function anchorBlock(s) {
   </div>`;
 }
 function quickHitBlock(s) {
-  const source = `<span class="pill">[${s.sources[0].name}]</span>`;
+  const source = `<a href="${s.sources[0].url}" target="_blank" rel="noopener" class="pill">[${s.sources[0].name}]</a>`;
   return `<div class="quick-hit">
     <div class="tag">[ ${s.section} &middot; ${sectionLabel(s.section).toUpperCase()} ]</div>
     <p>${s.quickHit || s.body}</p>
