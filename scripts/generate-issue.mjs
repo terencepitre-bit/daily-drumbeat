@@ -1,16 +1,27 @@
-// generate-issue.mjs — two-column magazine edition
+// generate-issue.mjs — anchor + quick-hits, flexible-range, overhauled Sports
 //
-// Content structure (5+2+2+1), unchanged from before:
-//   5 = five AI-curated stories   2 = Money Moves + Sports (no AI)
-//   2 = This Day in Legacy + The Number (no AI)   1 = closer (AI)
+// Structure:
+//   1 anchor      = the day's single most significant story: longer body,
+//                   topic kicker, boxed "The takeaway," 2 sources
+//   8-12 total    = flexible range (editorial judgment, never padded to
+//                   the max, never cut short of real coverage), quick hits
+//                   are 1 sentence, <=30 words, 1 source each, no paywalls
+//   2 data desks  = Money Moves + Sports (no AI, free feeds)
+//   1 closer      = short joy/community story or quote (AI)
+//   + This Day in Legacy (standalone, no AI) + The Number (standalone, no AI)
+//   + Green Book  = auto-curated real business + real opportunity, each
+//     found via web_search and link-checked. Real paid entries in
+//     green-book/listings.json override the automated pick.
 //
-// NEW in this version:
-//   - Visual design now matches the two-column magazine layout (assets/drumbeat.css)
-//   - Green Book section (Business of the Day + Opportunity board) — reads
-//     green-book/listings.json, which YOU maintain by hand. Never AI-written.
-//   - Writes both issues/YYYY-MM-DD.html (permanent archive copy) AND
-//     today.html (stable URL that always shows the latest edition)
-//   - index.html is now a separate "Landing" page, not the issue itself
+// Sports (P6) has three parts:
+//   - HBCU Watch: 2 real headlines from HBCU Gameday's free RSS feed,
+//     plus live HBCU scores (football/basketball/baseball) when in season,
+//     capped at 8 combined. No AI involved - RSS is just free data.
+//   - Last Night: WNBA/NBA capped at 5 each; NFL/MLB/NHL/MLS uncapped
+//     (every final score shown).
+//   - On Deck Tonight: WNBA/NBA capped at 5 each; NFL/MLB/NHL/MLS capped
+//     at 4, and replaced with a one-line summary ("MLB: full slate, 15
+//     games") when there are more than 4 scheduled.
 
 import { writeFile, readFile, mkdir } from "node:fs/promises";
 import path from "node:path";
@@ -19,6 +30,8 @@ import path from "node:path";
 const SITE_NAME = "The Daily Drumbeat";
 const SITE_URL = "https://thedailydrumbeat.com";
 const MODEL = "claude-haiku-4-5-20251001";
+const MIN_STORIES = 8;
+const MAX_STORIES = 12; // hard ceiling — never more than this regardless of news volume
 
 const ANTHROPIC_API_KEY = process.env.ANTHROPIC_API_KEY;
 const FRED_API_KEY = process.env.FRED_API_KEY;
@@ -30,11 +43,15 @@ const BREVO_SENDER_NAME = process.env.BREVO_SENDER_NAME || SITE_NAME;
 
 const STORY_SECTIONS = [
   { code: "P1", name: "Business & Enterprise", required: false },
-  { code: "P2", name: "Policy & Justice", required: true },
+  { code: "P2", name: "Policy & Justice", required: true }, // must run every day
   { code: "P3", name: "Economy & Work", required: false },
   { code: "P5", name: "HBCUs & Education", required: false },
+  { code: "P8", name: "Tech & Innovation", required: false },
+  { code: "P9", name: "Health Equity", required: false },
+  { code: "P10", name: "Land & Legacy", required: false },
   { code: "P11", name: "Black Excellence", required: false }
 ];
+// P7 (Culture & Community) is reserved for the Closer, not a regular story.
 
 function todayParts(offsetDays = 0) {
   const now = new Date(Date.now() + offsetDays * 86400000);
@@ -57,8 +74,19 @@ async function safeFetchJson(url, opts = {}, label = url) {
 }
 
 // =========================================================
-// DATA BOXES — no AI cost (unchanged logic from previous version)
+// DATA BOXES — no AI cost
 // =========================================================
+async function fredWithChange(seriesId) {
+  if (!FRED_API_KEY) return null;
+  const url = `https://api.stlouisfed.org/fred/series/observations?series_id=${seriesId}&api_key=${FRED_API_KEY}&file_type=json&sort_order=desc&limit=2`;
+  const data = await safeFetchJson(url, {}, `FRED ${seriesId}`);
+  const obs = (data?.observations || []).filter(o => o.value !== ".");
+  if (!obs.length) return null;
+  const latest = Number(obs[0].value);
+  const prev = obs[1] ? Number(obs[1].value) : null;
+  const changePct = prev ? ((latest - prev) / prev) * 100 : null;
+  return { value: latest, date: obs[0].date, changePct };
+}
 async function fredLatest(seriesId, extraParams = "") {
   if (!FRED_API_KEY) return null;
   const url = `https://api.stlouisfed.org/fred/series/observations?series_id=${seriesId}&api_key=${FRED_API_KEY}&file_type=json&sort_order=desc&limit=1${extraParams}`;
@@ -76,22 +104,29 @@ async function fetchFinnhubQuote(symbol) {
 
 async function fetchMoneyMoves() {
   const [mortgage, sp500, dow, cpiYoy, unone, rlj, carv, crypto] = await Promise.all([
-    fredLatest("MORTGAGE30US"), fredLatest("SP500"), fredLatest("DJIA"),
+    fredLatest("MORTGAGE30US"), fredWithChange("SP500"), fredWithChange("DJIA"),
     fredLatest("CPIAUCSL", "&units=pc1"),
     fetchFinnhubQuote("UONE"), fetchFinnhubQuote("RLJ"), fetchFinnhubQuote("CARV"),
-    safeFetchJson("https://api.coingecko.com/api/v3/simple/price?ids=bitcoin,ethereum&vs_currencies=usd", {}, "CoinGecko")
+    safeFetchJson("https://api.coingecko.com/api/v3/simple/price?ids=bitcoin,ethereum&vs_currencies=usd&include_24hr_change=true", {}, "CoinGecko")
   ]);
+  const fmtIdx = (v) => v?.value != null ? Number(v.value).toLocaleString(undefined, { maximumFractionDigits: 2 }) : null;
   return {
     mortgage30yr: mortgage?.value ? `${Number(mortgage.value).toFixed(2)}%` : null,
-    sp500: sp500?.value ? Number(sp500.value).toLocaleString(undefined, { maximumFractionDigits: 2 }) : null,
-    dow: dow?.value ? Number(dow.value).toLocaleString(undefined, { maximumFractionDigits: 2 }) : null,
+    sp500: fmtIdx(sp500), sp500Change: sp500?.changePct ?? null,
+    dow: fmtIdx(dow), dowChange: dow?.changePct ?? null,
     cpiYoy: cpiYoy?.value ? `${Number(cpiYoy.value).toFixed(1)}%` : null,
     btc: crypto?.bitcoin?.usd ? `$${Math.round(crypto.bitcoin.usd).toLocaleString()}` : null,
+    btcChange: crypto?.bitcoin?.usd_24h_change ?? null,
     eth: crypto?.ethereum?.usd ? `$${Math.round(crypto.ethereum.usd).toLocaleString()}` : null,
-    tickers: [{ symbol: "UONE", ...unone }, { symbol: "RLJ", ...rlj }, { symbol: "CARV", ...carv }].filter(t => t.price != null)
+    ethChange: crypto?.ethereum?.usd_24h_change ?? null,
+    tickers: [{ symbol: "UONE", ...unone }, { symbol: "RLJ", ...rlj }, { symbol: "CARV", ...carv }].filter(t => t.price != null),
+    asOf: new Date().toLocaleString("en-US", { weekday: "long", hour: "numeric", minute: "2-digit", timeZoneName: "short" })
   };
 }
 
+// =========================================================
+// SPORTS — HBCU Watch (RSS + live scores) + capped major leagues
+// =========================================================
 const HBCU_SCHOOLS = [
   "Alabama A&M", "Alabama State", "Alcorn State", "Arkansas-Pine Bluff", "Bethune-Cookman",
   "Bowie State", "Coppin State", "Delaware State", "Elizabeth City State", "Fayetteville State",
@@ -101,6 +136,24 @@ const HBCU_SCHOOLS = [
   "Savannah State", "Shaw", "South Carolina State", "Southern University", "Southern",
   "Tennessee State", "Texas Southern", "Tuskegee", "Virginia State", "Virginia Union",
   "Winston-Salem State"
+];
+const HBCU_PATHS = [
+  "football/college-football",
+  "basketball/mens-college-basketball",
+  "basketball/womens-college-basketball",
+  "baseball/college-baseball"
+];
+// WNBA/NBA: capped at 5 for both last-night and on-deck.
+const CAPPED_LEAGUES = [
+  { path: "basketball/nba", label: "NBA" },
+  { path: "basketball/wnba", label: "WNBA" }
+];
+// Everyone else: last-night uncapped, on-deck capped at 4 or summarized.
+const GENERAL_LEAGUES = [
+  { path: "football/nfl", label: "NFL" },
+  { path: "baseball/mlb", label: "MLB" },
+  { path: "hockey/nhl", label: "NHL" },
+  { path: "soccer/usa.1", label: "MLS" }
 ];
 
 async function fetchEspnScoreboard(sportPath, dateIso) {
@@ -117,23 +170,79 @@ function summarizeGame(ev) {
   const when = state === "pre" ? ` (${new Date(ev.date).toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" })} ET)` : state === "in" ? " (live)" : " (final)";
   return `${a.team.shortDisplayName} vs ${b.team.shortDisplayName}${scoreStr}${when}`;
 }
+
+// Free HBCU sports news via HBCU Gameday's public RSS feed - no AI, no key.
+async function fetchHbcuGamedayHeadlines(limit = 2) {
+  try {
+    const res = await fetch("https://hbcugameday.com/feed", {
+      signal: AbortSignal.timeout(10000),
+      headers: { "User-Agent": "Mozilla/5.0 (compatible; DailyDrumbeatBot/1.0; +https://thedailydrumbeat.com)" }
+    });
+    if (!res.ok) throw new Error(`${res.status}`);
+    const xml = await res.text();
+    const items = [...xml.matchAll(/<item>([\s\S]*?)<\/item>/g)].slice(0, limit);
+    return items.map(([, block]) => {
+      const titleMatch = block.match(/<title>(?:<!\[CDATA\[)?(.*?)(?:\]\]>)?<\/title>/s);
+      const linkMatch = block.match(/<link>(.*?)<\/link>/s);
+      return { title: (titleMatch?.[1] || "").trim(), url: (linkMatch?.[1] || "").trim() };
+    }).filter(h => h.title && h.url);
+  } catch (err) {
+    console.warn(`[data] HBCU Gameday RSS failed: ${err.message}`);
+    return [];
+  }
+}
+
+async function fetchGeneralLeagueLines(league, todayIso, yestIso) {
+  const [yestGames, todayGames] = await Promise.all([
+    fetchEspnScoreboard(league.path, yestIso),
+    fetchEspnScoreboard(league.path, todayIso)
+  ]);
+  const lastNight = yestGames.filter(ev => ev.status?.type?.state === "post")
+    .map(summarizeGame).filter(Boolean).map(g => `${league.label}: ${g}`); // uncapped
+
+  const scheduled = todayGames.filter(ev => ev.status?.type?.state === "pre");
+  const onDeck = scheduled.length > 4
+    ? [`${league.label}: full slate, ${scheduled.length} games`]
+    : scheduled.map(summarizeGame).filter(Boolean).map(g => `${league.label}: ${g}`);
+  return { lastNight, onDeck };
+}
+async function fetchCappedLeagueLines(league, todayIso, yestIso) {
+  const [yestGames, todayGames] = await Promise.all([
+    fetchEspnScoreboard(league.path, yestIso),
+    fetchEspnScoreboard(league.path, todayIso)
+  ]);
+  const lastNight = yestGames.filter(ev => ev.status?.type?.state === "post")
+    .map(summarizeGame).filter(Boolean).slice(0, 5).map(g => `${league.label}: ${g}`);
+  const onDeck = todayGames.filter(ev => ev.status?.type?.state === "pre")
+    .map(summarizeGame).filter(Boolean).slice(0, 5).map(g => `${league.label}: ${g}`);
+  return { lastNight, onDeck };
+}
+
 async function fetchSportsBox() {
   const { iso: todayIso } = todayParts(0);
   const { iso: yestIso } = todayParts(-1);
-  const hbcuPaths = ["football/college-football", "basketball/mens-college-basketball", "basketball/womens-college-basketball"];
-  const hbcuGamesRaw = (await Promise.all(hbcuPaths.flatMap(p => [fetchEspnScoreboard(p, todayIso), fetchEspnScoreboard(p, yestIso)]))).flat();
-  const hbcuGames = hbcuGamesRaw.filter(ev => {
+
+  const [hbcuToday, hbcuYest, hbcuHeadlines, generalResults, cappedResults] = await Promise.all([
+    Promise.all(HBCU_PATHS.map(p => fetchEspnScoreboard(p, todayIso))),
+    Promise.all(HBCU_PATHS.map(p => fetchEspnScoreboard(p, yestIso))),
+    fetchHbcuGamedayHeadlines(2),
+    Promise.all(GENERAL_LEAGUES.map(l => fetchGeneralLeagueLines(l, todayIso, yestIso))),
+    Promise.all(CAPPED_LEAGUES.map(l => fetchCappedLeagueLines(l, todayIso, yestIso)))
+  ]);
+
+  const hbcuAll = [...hbcuToday.flat(), ...hbcuYest.flat()].filter(ev => {
     const names = ev.competitions?.[0]?.competitors?.map(c => c.team.displayName).join(" ") || "";
     return HBCU_SCHOOLS.some(school => names.includes(school));
-  }).map(summarizeGame).filter(Boolean).slice(0, 5);
+  });
+  const hbcuOnDeck = hbcuAll.filter(ev => ev.status?.type?.state === "pre").map(summarizeGame).filter(Boolean).slice(0, 8);
+  const hbcuLastNight = hbcuAll.filter(ev => ev.status?.type?.state === "post").map(summarizeGame).filter(Boolean).slice(0, 8);
 
-  const majorPaths = ["football/nfl", "basketball/nba", "baseball/mlb", "hockey/nhl"];
-  const lastNightRaw = (await Promise.all(majorPaths.map(p => fetchEspnScoreboard(p, yestIso)))).flat();
-  const lastNight = lastNightRaw.filter(ev => ev.status?.type?.state === "post").map(summarizeGame).filter(Boolean).slice(0, 4);
-  const onDeckRaw = (await Promise.all(majorPaths.map(p => fetchEspnScoreboard(p, todayIso)))).flat();
-  const onDeck = onDeckRaw.filter(ev => ev.status?.type?.state === "pre").map(summarizeGame).filter(Boolean).slice(0, 4);
-
-  return { hbcuGames, lastNight, onDeck };
+  return {
+    hbcuHeadlines,
+    hbcuGames: [...hbcuLastNight, ...hbcuOnDeck],
+    lastNight: [...cappedResults.flatMap(r => r.lastNight), ...generalResults.flatMap(r => r.lastNight)],
+    onDeck: [...cappedResults.flatMap(r => r.onDeck), ...generalResults.flatMap(r => r.onDeck)]
+  };
 }
 
 const LEGACY_KEYWORDS = /african|black|slave|civil rights|jim crow|naacp|segregat|harlem renaissance|negro|colored|freedmen|apartheid|jamaica|haiti|caribbean|pan-african|reparations|underground railroad/i;
@@ -144,74 +253,106 @@ async function fetchThisDayInLegacy() {
   const hit = (data.events || []).find(e => LEGACY_KEYWORDS.test(e.text || "") || (e.pages || []).some(p => LEGACY_KEYWORDS.test(p.extract || p.description || "")));
   if (!hit) return null;
   const link = hit.pages?.[0]?.content_urls?.desktop?.page || "https://en.wikipedia.org/wiki/Portal:Black_history";
-  return { year: hit.year, text: hit.text, url: link };
+  return { year: hit.year, text: hit.text, url: link, sourceName: "Wikipedia · On This Day" };
 }
 async function fetchTheNumber(dayOfYear) {
   if (dayOfYear % 2 === 0) {
     const m = await fredLatest("MORTGAGE30US");
-    return m ? { label: "30-yr mortgage avg", value: `${Number(m.value).toFixed(2)}%`, source: "FRED" } : null;
+    return m ? { label: "30-year fixed mortgage, this week", value: `${Number(m.value).toFixed(2)}%`, source: "FRED", sourceUrl: "https://fred.stlouisfed.org/series/MORTGAGE30US" } : null;
   } else {
     const h = await fredLatest("BOAAAHORUSQ156N");
-    return h ? { label: "Black homeownership", value: `${Number(h.value).toFixed(1)}%`, source: "Census via FRED" } : null;
+    return h ? { label: "Black homeownership rate", value: `${Number(h.value).toFixed(1)}%`, source: "Census via FRED", sourceUrl: "https://fred.stlouisfed.org/series/BOAAAHORUSQ156N" } : null;
   }
 }
 
-// ---- Green Book: reads YOUR file, never AI-generated ----
-async function fetchGreenBook() {
+async function fetchManualGreenBook() {
   try {
     const raw = await readFile("green-book/listings.json", "utf-8");
     const data = JSON.parse(raw);
-    return {
-      business: data.businessOfTheDay?.[0] || null,
-      opportunity: data.opportunities?.[0] || null
-    };
+    return { business: data.businessOfTheDay?.[0] || null, opportunity: data.opportunities?.[0] || null };
   } catch {
-    console.warn("[data] green-book/listings.json missing or invalid - skipping Green Book box");
     return { business: null, opportunity: null };
   }
 }
 
 // =========================================================
-// 5 STORIES + 1 CLOSER — only part that calls Claude
+// EVERYTHING BELOW CALLS CLAUDE
 // =========================================================
-const CURATION_PROMPT = `You are the morning news curator for ${SITE_NAME}, a free daily newsletter
+const CURATION_PROMPT = `You are the morning content curator for ${SITE_NAME}, a free daily newsletter
 covering news that materially affects Black America.
 
-Use the web_search tool to find real news published in the last 24-48 hours.
+Use the web_search tool. Never invent a URL — only cite URLs that actually appeared in your
+own web_search results this run.
 
-Curate exactly 5 stories, one for each of these sections:
-${STORY_SECTIONS.map(s => `- ${s.code}: ${s.name}${s.required ? " (MUST run every single day, even on a slow news day)" : ""}`).join("\n")}
-If P11 (Black Excellence) has more real wins than usual, you may run it twice and skip a
-non-required section instead, but you must still produce exactly 5 stories total.
+PART 1 — Curate between ${MIN_STORIES} and ${MAX_STORIES} stories total, using editorial
+judgment: cover these core beats (Policy & Justice MUST appear at least once, even on a slow
+news day), and only go beyond ${MIN_STORIES} when there is genuinely enough real, substantive
+news to justify it. Never pad to hit ${MAX_STORIES}, and never cut a real story just to land on
+a round number.
+${STORY_SECTIONS.map(s => `- ${s.code}: ${s.name}${s.required ? " (required every day)" : ""}`).join("\n")}
+If a beat has more real news than usual (a big Black Excellence day, for example), it's fine
+to cover it with 2-3 stories instead of 1.
 
-ALSO curate exactly 1 "closer": either a short uplifting Culture & Community or Health &
-Wellness story, OR a brief attributed quote (under 15 words, from a real historical or
-contemporary Black figure) meant to end the newsletter on joy or community rather than news.
+IMPORTANT — every source, for every story, must be freely accessible with no paywall. Do not
+cite outlets you know sit behind a hard paywall (e.g. WSJ subscriber-only pieces). If the only
+coverage of something is paywalled, either find a freely-accessible outlet covering the same
+story or skip that story.
 
-For EACH of the 5 stories you must have called web_search and found at least 2 separate
-outlets reporting on it, or one outlet plus one primary source. NEVER invent a URL — only
-cite URLs that actually appeared in your own web_search results this run.
+Of these stories, choose exactly ONE to be "the anchor" — whichever is genuinely the
+most significant story of the day. Mark it with "isAnchor": true. The anchor gets:
+- a short topic "kicker" label in all caps (e.g. "GOVERNMENT WATCH", "MARKET WATCH")
+- a fuller body: 80-120 words, 2-3 sentences
+- a "takeaway": one sharp sentence on why this matters, for a boxed callout
+- exactly 2 sources
+
+Every other story is a "quick hit": exactly ONE sentence, **30 words or fewer**, with the
+impact or stakes built directly into that sentence (not just a fact — say why it matters in
+the same breath). Exactly 1 source each, freely accessible, no paywall.
+
+PART 2 — Also write exactly 2 backup quick hits (any category, 1 source each, never the
+anchor, freely accessible) to be used only if a primary story's source fails a later
+link-check.
+
+PART 3 — Curate exactly 1 "closer": a short uplifting Culture & Community or Health &
+Wellness item, OR a brief attributed quote (under 15 words, from a real Black figure). 1 source
+if it's a story, 0 if it's a quote.
+
+PART 4 — Green Book: find ONE real, currently-operating Black-owned business worth
+spotlighting, and ONE real, currently-open opportunity (scholarship, grant, fellowship,
+program) for Black students/entrepreneurs. Both must come from an actual web_search result
+with a real URL. Return null for either if you can't find a genuinely real, verifiable one.
 
 Output ONLY valid JSON, no markdown fences, no commentary, exactly this shape:
 {
   "stories": [
-    { "section": "P1", "headline": "...", "blurb": "2-3 original sentences, 25-70 words",
-      "sources": [{"name":"...","url":"..."},{"name":"...","url":"..."}] }
+    { "section": "P2", "isAnchor": true, "headline": "...", "kicker": "GOVERNMENT WATCH",
+      "body": "80-120 words...", "takeaway": "one sharp sentence",
+      "sources": [{"name":"...","url":"..."},{"name":"...","url":"..."}] },
+    { "section": "P1", "isAnchor": false, "headline": "...", "quickHit": "one sentence, <=30 words, impact built in",
+      "sources": [{"name":"...","url":"..."}] }
+  ],
+  "backups": [
+    { "section": "P3", "isAnchor": false, "headline": "...", "quickHit": "...",
+      "sources": [{"name":"...","url":"..."}] }
   ],
   "closer": {
-    "type": "story" or "quote",
-    "headline": "only if type is story",
-    "text": "the blurb, or the quote itself",
-    "attribution": "only if type is quote - who said it",
-    "sources": [{"name":"...","url":"..."}]
+    "type": "story" or "quote", "headline": "only if type is story",
+    "text": "the blurb (1-2 sentences) or the quote itself",
+    "attribution": "only if type is quote", "sources": [{"name":"...","url":"..."}]
+  },
+  "greenBook": {
+    "business": { "name":"...", "tagline":"...", "description":"25-50 words", "url":"...", "sourceName":"..." } or null,
+    "opportunity": { "title":"...", "amount":"...", "deadline":"...", "description":"25-50 words", "url":"...", "sourceName":"..." } or null
   }
 }
 
 Rules:
-- Exactly 5 stories, each with exactly 2 sources (P2 Policy & Justice is mandatory).
-- Blurbs are summaries in your own words, never close paraphrases of source wording.
-- No opinion pieces presented as news, no tabloid gossip.
-- Headlines under 12 words.`;
+- Between ${MIN_STORIES} and ${MAX_STORIES} stories, exactly one with isAnchor true, exactly 2 backups.
+- Anchor: exactly 2 sources. Quick hits and backups: exactly 1 source each.
+- Every source is freely accessible — no paywalls, ever.
+- All text is original wording, never a close paraphrase of source wording.
+- No opinion pieces presented as news, no tabloid gossip, no fabricated businesses or grants.
+- Headlines under 12 words. Quick hit sentences: 30 words maximum.`;
 
 async function curateContent() {
   const { label } = todayParts(0);
@@ -219,45 +360,87 @@ async function curateContent() {
     method: "POST",
     headers: { "content-type": "application/json", "x-api-key": ANTHROPIC_API_KEY, "anthropic-version": "2023-06-01" },
     body: JSON.stringify({
-      model: MODEL, max_tokens: 4000, system: CURATION_PROMPT,
-      messages: [{ role: "user", content: `Today is ${label}. Curate today's 5 stories and 1 closer now.` }],
-      tools: [{ type: "web_search_20250305", name: "web_search", max_uses: 18 }]
+      model: MODEL, max_tokens: 7000, system: CURATION_PROMPT,
+      messages: [{ role: "user", content: `Today is ${label}. Curate today's ${MIN_STORIES}-${MAX_STORIES} stories (with 1 anchor), 2 backups, 1 closer, and the Green Book now.` }],
+      tools: [{ type: "web_search_20250305", name: "web_search", max_uses: 35 }]
     })
   });
   if (!res.ok) throw new Error(`Anthropic API error ${res.status}: ${await res.text()}`);
   const data = await res.json();
   const textBlocks = data.content.filter(b => b.type === "text").map(b => b.text);
   const raw = textBlocks[textBlocks.length - 1] || "";
-  // Extract just the {...} object even if Claude added a sentence before/after it
   const jsonStart = raw.indexOf("{");
   const jsonEnd = raw.lastIndexOf("}");
   if (jsonStart === -1 || jsonEnd === -1) throw new Error(`No JSON object found in Claude's response: ${raw.slice(0, 300)}`);
-  const jsonStr = raw.slice(jsonStart, jsonEnd + 1);
-  return JSON.parse(jsonStr);
+  return JSON.parse(raw.slice(jsonStart, jsonEnd + 1));
 }
+
 async function urlIsAlive(url) {
   try {
     const res = await fetch(url, {
-      method: "GET",
-      redirect: "follow",
-      signal: AbortSignal.timeout(8000),
+      method: "GET", redirect: "follow", signal: AbortSignal.timeout(8000),
       headers: { "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Safari/537.36" }
     });
     return res.status < 400;
   } catch { return false; }
 }
+
 async function validateStories(stories) {
   const kept = [];
-  for (const s of stories) {
-    if (!s.sources || s.sources.length < 2) continue;
+  for (const s of stories || []) {
+    const minSources = s.isAnchor ? 2 : 1;
+    if (!s.sources || s.sources.length < minSources) continue;
     const checks = await Promise.all(s.sources.map(src => urlIsAlive(src.url)));
-    if (checks.every(Boolean)) kept.push(s); else console.warn(`Dropped story "${s.headline}" - a source link failed`);
+    if (checks.every(Boolean)) kept.push(s); else console.warn(`Dropped "${s.headline}" - a source link failed`);
   }
   return kept;
 }
 
+function assembleStories(validPrimaries, validBackups) {
+  const usedHeadlines = new Set();
+  const final = [];
+
+  let anchor = validPrimaries.find(s => s.isAnchor);
+  if (anchor) { final.push(anchor); usedHeadlines.add(anchor.headline); }
+
+  for (const s of validPrimaries) {
+    if (usedHeadlines.has(s.headline)) continue;
+    final.push(s); usedHeadlines.add(s.headline);
+  }
+
+  // Top up from backups only if we're below the minimum - never pad
+  // just to reach the max.
+  for (const s of validBackups) {
+    if (final.length >= MIN_STORIES) break;
+    if (usedHeadlines.has(s.headline)) continue;
+    final.push(s); usedHeadlines.add(s.headline);
+  }
+
+  if (!final.some(s => s.isAnchor) && final.length) {
+    final[0] = { ...final[0], isAnchor: true, kicker: final[0].kicker || "TODAY'S TOP STORY", body: final[0].body || final[0].quickHit, takeaway: final[0].takeaway || null };
+  }
+
+  return final.slice(0, MAX_STORIES); // hard ceiling, regardless of how much validated
+}
+
+async function resolveGreenBook(aiGreenBook) {
+  const manual = await fetchManualGreenBook();
+  let business = manual.business ? { ...manual.business, sponsored: true } : null;
+  let opportunity = manual.opportunity ? { ...manual.opportunity, sponsored: true } : null;
+
+  if (!business && aiGreenBook?.business?.url) {
+    if (await urlIsAlive(aiGreenBook.business.url)) business = { ...aiGreenBook.business, sponsored: false };
+    else console.warn("Dropped AI-picked Green Book business - source link failed");
+  }
+  if (!opportunity && aiGreenBook?.opportunity?.url) {
+    if (await urlIsAlive(aiGreenBook.opportunity.url)) opportunity = { ...aiGreenBook.opportunity, sponsored: false };
+    else console.warn("Dropped AI-picked Green Book opportunity - source link failed");
+  }
+  return { business, opportunity };
+}
+
 // =========================================================
-// HTML BUILDING — new two-column design
+// HTML BUILDING
 // =========================================================
 function sectionLabel(code) { return STORY_SECTIONS.find(s => s.code === code)?.name || code; }
 
@@ -285,27 +468,40 @@ function footer() {
   </div>`;
 }
 
-function storyBlock(s) {
+function anchorBlock(s) {
   const sources = s.sources.map(src => `<span class="pill">[${src.name}]</span>`).join(" ");
-  return `<div class="story">
-    <div class="tag">[ ${s.section} &middot; ${sectionLabel(s.section).toUpperCase()} ]</div>
+  return `<div class="story anchor-story">
+    <div class="tag">[ ${s.section} &middot; ${sectionLabel(s.section).toUpperCase()} &middot; THE ANCHOR ]</div>
     <h2>${s.headline}</h2>
-    <p>${s.blurb}</p>
+    <p>${s.kicker ? `<b>${s.kicker} &mdash; </b>` : ""}${s.body}</p>
+    ${s.takeaway ? `<div class="takeaway"><div class="takeaway-label">The takeaway</div>${s.takeaway}</div>` : ""}
     <div class="story-footer">
       <div class="sources"><span class="label">Sources</span> ${sources}</div>
       <button class="copy-link" onclick="navigator.clipboard.writeText('${(s.headline + " — " + s.sources[0].url).replace(/'/g, "&#39;")}'); this.textContent='Copied';">Copy Link</button>
     </div>
   </div>`;
 }
+function quickHitBlock(s) {
+  const source = `<span class="pill">[${s.sources[0].name}]</span>`;
+  return `<div class="quick-hit">
+    <div class="tag">[ ${s.section} &middot; ${sectionLabel(s.section).toUpperCase()} ]</div>
+    <p>${s.quickHit || s.body}</p>
+    <div class="story-footer">
+      <div class="sources">${source}</div>
+      <button class="copy-link" onclick="navigator.clipboard.writeText('${(s.headline + " — " + s.sources[0].url).replace(/'/g, "&#39;")}'); this.textContent='Copied';">Copy Link</button>
+    </div>
+  </div>`;
+}
 
 function moneyMovesBox(m) {
+  const chg = (v) => v == null ? "" : `<span class="${v >= 0 ? "change-up" : "change-down"}">${v >= 0 ? "+" : ""}${v.toFixed(1)}%</span>`;
   const rows = [];
-  if (m.sp500) rows.push(["S&P 500", m.sp500, ""]);
-  if (m.dow) rows.push(["Dow Jones", m.dow, ""]);
+  if (m.sp500) rows.push(["S&P 500", `${m.sp500} ${chg(m.sp500Change)}`, ""]);
+  if (m.dow) rows.push(["Dow Jones", `${m.dow} ${chg(m.dowChange)}`, ""]);
   if (m.mortgage30yr) rows.push(["30-Yr Mortgage", m.mortgage30yr, "FRED / Freddie Mac"]);
   if (m.cpiYoy) rows.push(["CPI (YoY)", m.cpiYoy, "BLS via FRED"]);
-  if (m.btc) rows.push(["Bitcoin", m.btc, "CoinGecko"]);
-  if (m.eth) rows.push(["Ethereum", m.eth, "CoinGecko"]);
+  if (m.btc) rows.push(["Bitcoin", `${m.btc} ${chg(m.btcChange)}`, "CoinGecko"]);
+  if (m.eth) rows.push(["Ethereum", `${m.eth} ${chg(m.ethChange)}`, "CoinGecko"]);
   if (!rows.length && !m.tickers.length) return "";
   const tickerRows = m.tickers.map(t => {
     const dir = t.changePct >= 0 ? "change-up" : "change-down";
@@ -314,36 +510,61 @@ function moneyMovesBox(m) {
   return `<div class="box">
     <div class="box-head">
       <div class="tag">[ P4 &middot; MONEY MOVES ]</div>
-      <span class="badge">Auto via free APIs — zero credits</span>
     </div>
     <table>${rows.map(([a, v, s]) => `<tr><td class="asset">${a}</td><td>${v}</td><td class="source-note">${s}</td></tr>`).join("")}</table>
     ${m.tickers.length ? `<div style="margin-top:14px; font-size:11px; letter-spacing:1px; text-transform:uppercase; color:var(--muted);">Black Wall Street Watch</div><table style="margin-top:6px;">${tickerRows}</table>` : ""}
-    <div class="sponsor-note">Data via Finnhub (free), FRED (free), CoinGecko (free) &middot; <a href="advertise.html">Sponsor this box</a></div>
+    <div class="sponsor-note">As of ${m.asOf} &middot; Finnhub, FRED, CoinGecko (all free) &middot; <a href="advertise.html">Sponsor this box</a></div>
   </div>`;
 }
 
 function sportsBox(s) {
-  if (!s.hbcuGames.length && !s.lastNight.length && !s.onDeck.length) return "";
+  const hasAny = s.hbcuHeadlines.length || s.hbcuGames.length || s.lastNight.length || s.onDeck.length;
+  if (!hasAny) return "";
   const list = (arr) => arr.map(g => `<div style="padding:6px 0; border-bottom:1px solid var(--border); font-size:14px;">${g}</div>`).join("");
+  const headlineList = s.hbcuHeadlines.map(h => `<div style="padding:6px 0; border-bottom:1px solid var(--border); font-size:14px;">${h.title} <a href="${h.url}" style="color:var(--red); font-size:12px;">[HBCU Gameday]</a></div>`).join("");
   return `<div class="box">
     <div class="box-head">
-      <div class="tag">[ P6 &middot; HBCU SPORTS ONLY ]</div>
-      <span class="badge">Auto via ESPN API — free</span>
+      <div class="tag">[ P6 &middot; SPORTS ]</div>
     </div>
-    ${s.hbcuGames.length ? list(s.hbcuGames) : `<div style="font-size:13px; color:var(--muted);">No HBCU games found today.</div>`}
-    ${s.lastNight.length || s.onDeck.length ? `<div style="margin-top:14px; font-size:11px; letter-spacing:1px; text-transform:uppercase; color:var(--muted);">Majors — last night / on deck</div>${list([...s.lastNight, ...s.onDeck])}` : ""}
+    <div style="font-size:11px; letter-spacing:1px; text-transform:uppercase; color:var(--muted); margin-bottom:4px;">HBCU Watch</div>
+    ${headlineList}
+    ${s.hbcuGames.length ? list(s.hbcuGames) : (s.hbcuHeadlines.length ? "" : `<div style="font-size:13px; color:var(--muted); padding:6px 0;">No HBCU news found today.</div>`)}
+    ${s.lastNight.length ? `<div style="margin-top:14px; font-size:11px; letter-spacing:1px; text-transform:uppercase; color:var(--muted);">Last Night</div>${list(s.lastNight)}` : ""}
+    ${s.onDeck.length ? `<div style="margin-top:14px; font-size:11px; letter-spacing:1px; text-transform:uppercase; color:var(--muted);">On Deck Tonight</div>${list(s.onDeck)}` : ""}
+  </div>`;
+}
+
+function legacyBox(legacy) {
+  if (!legacy) return "";
+  return `<div class="box">
+    <div class="box-head"><div class="tag">[ P10 &middot; THIS DAY IN LEGACY ]</div></div>
+    <div style="font-size:14px; line-height:1.7;"><b>${legacy.year}</b> &mdash; ${legacy.text}</div>
+    <div class="sponsor-note">From: <a href="${legacy.url}">${legacy.sourceName}</a></div>
+  </div>`;
+}
+
+function numberBox(theNumber) {
+  if (!theNumber) return "";
+  return `<div class="drumroll">
+    <div class="drumroll-head"><div class="dot">D</div><h3>The Drum Roll</h3></div>
+    <div style="padding:22px 24px;">
+      <div class="kicker">The Number</div>
+      <div class="big">${theNumber.value}</div>
+      <div class="note">${theNumber.label} &middot; <a href="${theNumber.sourceUrl}" style="color:var(--red);">${theNumber.source}</a></div>
+    </div>
   </div>`;
 }
 
 function greenBookBox(gb) {
   if (!gb.business && !gb.opportunity) return "";
+  const anySponsored = gb.business?.sponsored || gb.opportunity?.sponsored;
   return `<div class="box">
     <div class="box-head">
       <div class="tag">[ GB &middot; THE GREEN BOOK ]</div>
-      <span class="badge">Sponsored</span>
+      ${anySponsored ? `<span class="badge">Sponsored</span>` : ""}
     </div>
     ${gb.business ? `
-    <div class="tag" style="font-size:11px;">Business of the Day</div>
+    <div class="tag" style="font-size:11px;">${gb.business.sponsored ? "Business of the Day" : "Business Spotlight"}</div>
     <h3 style="margin:6px 0 4px; font-size:17px;">${gb.business.name}</h3>
     <div style="font-size:13px; color:var(--muted); margin-bottom:8px;">${gb.business.tagline || ""}</div>
     <p style="font-size:14px; line-height:1.6;">${gb.business.description || ""}</p>
@@ -353,29 +574,13 @@ function greenBookBox(gb) {
     ${gb.opportunity ? `
     <div style="border-top:1px solid var(--border); margin-top:18px; padding-top:16px;">
       <div class="tag" style="font-size:11px;">Opportunity</div>
-      <h3 style="margin:6px 0 4px; font-size:17px;">${gb.opportunity.title} &mdash; ${gb.opportunity.amount}${gb.opportunity.deadline ? ` &mdash; Deadline ${gb.opportunity.deadline}` : ""}</h3>
+      <h3 style="margin:6px 0 4px; font-size:17px;">${gb.opportunity.title} &mdash; ${gb.opportunity.amount || ""}${gb.opportunity.deadline ? ` &mdash; Deadline ${gb.opportunity.deadline}` : ""}</h3>
       <p style="font-size:14px; line-height:1.6;">${gb.opportunity.description || ""}</p>
       <a href="${gb.opportunity.url}" style="font-size:12px; font-weight:700; letter-spacing:1px; text-transform:uppercase; text-decoration:underline;">${gb.opportunity.cta || "Apply"} &rarr;</a>
     </div>` : ""}
-    <div class="sponsor-note">Free + monetizable &middot; Want to be featured? <a href="advertise.html">Advertise</a></div>
+    <div class="sponsor-note">Want your business featured here? <a href="advertise.html">Advertise</a></div>
   </div>
   <div class="box" style="text-align:center; border-style:dashed; color:var(--muted); font-size:12px; letter-spacing:1px; text-transform:uppercase;">Ad Slot — Money Moves Sponsor &middot; 300x100 &middot; <a href="advertise.html" style="color:var(--red);">Available</a></div>`;
-}
-
-function drumRoll(legacy, theNumber) {
-  return `<div class="drumroll">
-    <div class="drumroll-head"><div class="dot">D</div><h3>The Drum Roll</h3></div>
-    <div class="drumroll-body">
-      <div>
-        <div class="kicker">The Number</div>
-        ${theNumber ? `<div class="big">${theNumber.value} &mdash; ${theNumber.label}</div><div class="note">[${theNumber.source}]</div>` : `<div class="note">Not available today.</div>`}
-      </div>
-      <div>
-        <div class="kicker">This Day in Legacy</div>
-        ${legacy ? `<div class="big" style="font-size:16px; font-weight:400; line-height:1.6;"><b>${legacy.year}</b> &mdash; ${legacy.text} <a href="${legacy.url}" style="color:var(--red); font-size:12px;">[More]</a></div>` : `<div class="note">Not available today.</div>`}
-      </div>
-    </div>
-  </div>`;
 }
 
 function closerBlock(closer, issueUrl) {
@@ -385,44 +590,54 @@ function closerBlock(closer, issueUrl) {
     ? `<div class="serif" style="font-style:italic; font-size:22px;">&ldquo;${closer.text}&rdquo;</div><div style="font-size:14px; color:var(--muted); margin-top:8px;">&mdash; ${closer.attribution}</div>`
     : `<h3 style="margin:0;">${closer.headline}</h3><p style="margin-top:8px;">${closer.text}</p>`;
   return `<div class="box" style="text-align:center;">
+    <div class="tag" style="margin-bottom:10px;">[ THE CLOSER &middot; P7 &middot; CULTURE & COMMUNITY ]</div>
     ${body}
-    <button class="copy-link" style="margin-top:14px;" onclick="navigator.clipboard.writeText('${shareText}'); this.textContent='Copied';">Copy Link — via thedailydrumbeat.com</button>
+    <button class="copy-link" style="margin-top:14px;" onclick="navigator.clipboard.writeText('${shareText}'); this.textContent='Copied';">Share the Daily Drumbeat</button>
   </div>`;
 }
 
-function todayEditionHtml({ dateLabel, volume, stories, closer, moneyMoves, sports, legacy, theNumber, greenBook, issueUrl, storyCount }) {
+function todayEditionHtml({ dateLabel, volume, stories, closer, moneyMoves, sports, legacy, theNumber, greenBook, issueUrl }) {
+  const quickHitCount = stories.length - 1;
+  const anchor = stories.find(s => s.isAnchor) || stories[0];
+  const quickHits = stories.filter(s => s !== anchor);
   return `${pageHead(dateLabel)}
   ${header("today.html")}
   <div class="wrap" style="padding-top:40px;">
     <div class="hero" style="padding-top:0;">
       <div class="maintitle" style="font-size:40px;">THE DAILY <span class="D">D</span>RUMBEAT</div>
       <div class="hero .volbar" style="max-width:760px; margin:20px auto 0; border-top:1px solid var(--ink); border-bottom:1px solid var(--ink); padding:10px 0; font-size:13px; letter-spacing:2px; text-transform:uppercase; color:var(--muted);">TODAY'S EDITION &mdash; ${volume} &mdash; ${dateLabel}</div>
-      <div class="stats"><span class="pill">${storyCount} stories</span><span class="pill">8 sections</span><span class="pill">5 min</span></div>
     </div>
 
     <div class="two-col" style="margin-top:40px;">
-      <div>${stories.map(storyBlock).join("\n        ")}</div>
+      <div>
+        ${anchorBlock(anchor)}
+        <div class="quick-hits-label">The quick ${quickHitCount}</div>
+        ${quickHits.map(quickHitBlock).join("\n        ")}
+      </div>
       <div>
         ${moneyMovesBox(moneyMoves)}
         ${sportsBox(sports)}
+        ${legacyBox(legacy)}
         ${greenBookBox(greenBook)}
       </div>
     </div>
 
-    ${drumRoll(legacy, theNumber)}
+    ${numberBox(theNumber)}
     <div style="margin-top:18px;">${closerBlock(closer, issueUrl)}</div>
   </div>
   ${footer()}
 </body></html>`;
 }
 
-function landingHtml({ dateLabel, volume, stories, issueUrl, storyCount }) {
-  const summary = stories.slice(0, 3).map(s => s.headline).join(", ");
+function landingHtml({ dateLabel, volume, stories, issueUrl }) {
+  const anchor = stories.find(s => s.isAnchor) || stories[0];
+  const summary = [anchor, ...stories.filter(s => s !== anchor).slice(0, 3)].map(s => s.headline).join(", ");
   const sectionCards = [
     ...stories.map(s => [s.section, sectionLabel(s.section), s.headline]),
     ["P4", "Money Moves", "Markets &middot; Mortgage &middot; Crypto"],
-    ["P6", "Sports", "HBCU sports only"],
-    ["GB", "The Green Book", "Business of the day + grant"]
+    ["P6", "Sports", "HBCU sports coverage"],
+    ["P10", "This Day in Legacy", "A Black-history fact for today"],
+    ["GB", "The Green Book", "Auto-spotlighted business + opportunity"]
   ];
   return `${pageHead("Landing")}
   ${header("index.html")}
@@ -432,12 +647,11 @@ function landingHtml({ dateLabel, volume, stories, issueUrl, storyCount }) {
     <div class="volbar">${volume} &mdash; ${dateLabel}</div>
     <div class="summary">In today&rsquo;s Drumbeat: ${summary}.</div>
     <a href="today.html" class="btn-primary">Read Today's Edition &rarr;</a>
-    <div class="stats"><span class="pill">${storyCount} stories</span><span class="pill">8 sections</span><span class="pill">five minutes</span><span class="pill">The Drum Roll + Green Book</span></div>
   </div>
 
   <div class="inside-today wrap">
     <h3>Inside Today</h3>
-    <div class="sub">All 8 sections</div>
+    <div class="sub">All sections</div>
     <div class="section-grid">
       ${sectionCards.map(([code, name, preview]) => `<a href="today.html"><div class="stag">[ ${code} &middot; ${name.toUpperCase()} ]</div><div class="stitle">${preview}</div></a>`).join("\n      ")}
     </div>
@@ -475,13 +689,20 @@ function archiveHtml(manifest) {
 // =========================================================
 async function sendBrevoCampaign({ dateLabel, issueUrl, stories, closer }) {
   if (!BREVO_API_KEY || !BREVO_LIST_ID || !BREVO_SENDER_EMAIL) { console.warn("Brevo env vars missing - skipping email send."); return; }
+  const anchor = stories.find(s => s.isAnchor) || stories[0];
+  const quickHits = stories.filter(s => s !== anchor);
   const htmlContent = `<div style="font-family:Georgia,serif; max-width:600px; margin:0 auto;">
     <h1 style="color:#8E2A2B;">The Daily Drumbeat — ${dateLabel}</h1>
-    ${stories.map(s => `<div style="margin-bottom:20px;">
-      <div style="font-size:12px; color:#8E2A2B; text-transform:uppercase; letter-spacing:1px;">${sectionLabel(s.section)}</div>
-      <h2 style="font-family:Georgia,serif; margin:6px 0;">${s.headline}</h2>
-      <p style="font-family:Helvetica,Arial,sans-serif; font-size:15px; line-height:1.6;">${s.blurb}</p>
-      <p style="font-size:13px; color:#6E6A60;">Sources: ${s.sources.map(src => `<a href="${src.url}">${src.name}</a>`).join(" &middot; ")}</p>
+    <div style="margin-bottom:24px;">
+      <div style="font-size:12px; color:#8E2A2B; text-transform:uppercase; letter-spacing:1px;">${sectionLabel(anchor.section)} &middot; The Anchor</div>
+      <h2 style="font-family:Georgia,serif; margin:6px 0;">${anchor.headline}</h2>
+      <p style="font-family:Helvetica,Arial,sans-serif; font-size:15px; line-height:1.6;">${anchor.kicker ? `<b>${anchor.kicker} — </b>` : ""}${anchor.body}</p>
+      ${anchor.takeaway ? `<p style="background:#F7F3EC; padding:10px 14px; font-size:14px;"><b>The takeaway:</b> ${anchor.takeaway}</p>` : ""}
+      <p style="font-size:13px; color:#6E6A60;">Sources: ${anchor.sources.map(src => `<a href="${src.url}">${src.name}</a>`).join(" &middot; ")}</p>
+    </div>
+    ${quickHits.map(s => `<div style="margin-bottom:14px;">
+      <div style="font-size:11px; color:#8E2A2B; text-transform:uppercase; letter-spacing:1px;">${sectionLabel(s.section)}</div>
+      <p style="font-family:Helvetica,Arial,sans-serif; font-size:14px; line-height:1.5;">${s.quickHit || s.body} <a href="${s.sources[0].url}" style="font-size:12px;">[${s.sources[0].name}]</a></p>
     </div>`).join("")}
     ${closer ? `<p style="font-style:italic;">${closer.type === "quote" ? `&ldquo;${closer.text}&rdquo; — ${closer.attribution}` : closer.text}</p>` : ""}
     <p><a href="${issueUrl}" style="background:#8E2A2B; color:#fff; padding:12px 24px; text-decoration:none;">Read online</a></p>
@@ -503,12 +724,16 @@ async function sendBrevoCampaign({ dateLabel, issueUrl, stories, closer }) {
 async function main() {
   const { iso, label, dayOfYear } = todayParts(0);
 
-  const [content, moneyMoves, sports, legacy, theNumber, greenBook] = await Promise.all([
-    curateContent(), fetchMoneyMoves(), fetchSportsBox(), fetchThisDayInLegacy(), fetchTheNumber(dayOfYear), fetchGreenBook()
+  const [content, moneyMoves, sports, legacy, theNumber] = await Promise.all([
+    curateContent(), fetchMoneyMoves(), fetchSportsBox(), fetchThisDayInLegacy(), fetchTheNumber(dayOfYear)
   ]);
 
-  const stories = await validateStories(content.stories || []);
+  const validPrimaries = await validateStories(content.stories);
+  const validBackups = await validateStories(content.backups);
+  const stories = assembleStories(validPrimaries, validBackups);
   if (stories.length === 0) throw new Error("No stories passed validation today - not publishing.");
+
+  const greenBook = await resolveGreenBook(content.greenBook);
 
   const manifestPath = path.join("issues", "manifest.json");
   let manifest = [];
@@ -519,10 +744,10 @@ async function main() {
   const issueUrl = `${SITE_URL}/${issueFile}`;
 
   await mkdir("issues", { recursive: true });
-  const html = todayEditionHtml({ dateLabel: label, volume, stories, closer: content.closer, moneyMoves, sports, legacy, theNumber, greenBook, issueUrl, storyCount: stories.length });
-  await writeFile(issueFile, html);       // permanent dated archive copy
-  await writeFile("today.html", html);     // stable "Today's Edition" URL
-  await writeFile("index.html", landingHtml({ dateLabel: label, volume, stories, issueUrl, storyCount: stories.length }));
+  const html = todayEditionHtml({ dateLabel: label, volume, stories, closer: content.closer, moneyMoves, sports, legacy, theNumber, greenBook, issueUrl });
+  await writeFile(issueFile, html);
+  await writeFile("today.html", html);
+  await writeFile("index.html", landingHtml({ dateLabel: label, volume, stories, issueUrl }));
 
   manifest.unshift({ date: iso, dateLabel: label, volume, file: issueFile, storyCount: stories.length, summary: stories.map(s => s.headline).join(", ") });
   manifest = manifest.slice(0, 90);
@@ -531,13 +756,11 @@ async function main() {
 
   await sendBrevoCampaign({ dateLabel: label, issueUrl, stories, closer: content.closer });
 
-  console.log(`Published ${issueFile} (+ today.html, index.html, archive.html) with ${stories.length} stories + closer.`);
+  console.log(`Published ${issueFile} with ${stories.length} stories (target ${MIN_STORIES}-${MAX_STORIES}, 1 anchor) + closer + Green Book.`);
 }
 
 export { todayEditionHtml, landingHtml, archiveHtml };
 
-// Only auto-run when executed directly (node scripts/generate-issue.mjs),
-// not when imported by a test/preview script.
 if (import.meta.url === `file://${process.argv[1]}`) {
   main().catch(err => { console.error(err); process.exit(1); });
 }
