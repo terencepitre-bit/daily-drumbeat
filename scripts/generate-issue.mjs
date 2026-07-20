@@ -479,8 +479,9 @@ function footer() {
   </div>`;
 }
 
-function anchorBlock(s) {
+function anchorBlock(s, issueUrl) {
   const sources = s.sources.map(src => `<a href="${src.url}" target="_blank" rel="noopener" class="pill">[${src.name}]</a>`).join(" ");
+  const shareText = `${s.headline} — via thedailydrumbeat.com ${issueUrl}`.replace(/'/g, "&#39;");
   return `<div class="story anchor-story">
     <div class="tag">[ ${s.section} &middot; ${sectionLabel(s.section).toUpperCase()} &middot; THE ANCHOR ]</div>
     <h2>${s.headline}</h2>
@@ -488,18 +489,19 @@ function anchorBlock(s) {
     ${s.takeaway ? `<div class="takeaway"><div class="takeaway-label">The takeaway</div>${s.takeaway}</div>` : ""}
     <div class="story-footer">
       <div class="sources"><span class="label">Sources</span> ${sources}</div>
-      <button class="copy-link" onclick="navigator.clipboard.writeText('${(s.headline + " — " + s.sources[0].url).replace(/'/g, "&#39;")}'); this.textContent='Copied';">Copy Link</button>
+      <button class="copy-link" onclick="navigator.clipboard.writeText('${shareText}'); this.textContent='Copied';">Copy Link</button>
     </div>
   </div>`;
 }
-function quickHitBlock(s) {
+function quickHitBlock(s, issueUrl) {
   const source = `<a href="${s.sources[0].url}" target="_blank" rel="noopener" class="pill">[${s.sources[0].name}]</a>`;
+  const shareText = `${s.headline} — via thedailydrumbeat.com ${issueUrl}`.replace(/'/g, "&#39;");
   return `<div class="quick-hit">
     <div class="tag">[ ${s.section} &middot; ${sectionLabel(s.section).toUpperCase()} ]</div>
     <p>${s.quickHit || s.body}</p>
     <div class="story-footer">
       <div class="sources">${source}</div>
-      <button class="copy-link" onclick="navigator.clipboard.writeText('${(s.headline + " — " + s.sources[0].url).replace(/'/g, "&#39;")}'); this.textContent='Copied';">Copy Link</button>
+      <button class="copy-link" onclick="navigator.clipboard.writeText('${shareText}'); this.textContent='Copied';">Copy Link</button>
     </div>
   </div>`;
 }
@@ -621,9 +623,9 @@ function todayEditionHtml({ dateLabel, volume, stories, closer, moneyMoves, spor
 
     <div class="two-col" style="margin-top:40px;">
       <div>
-        ${anchorBlock(anchor)}
+        ${anchorBlock(anchor, issueUrl)}
         <div class="quick-hits-label">The quick ${quickHitCount}</div>
-        ${quickHits.map(quickHitBlock).join("\n        ")}
+        ${quickHits.map(s => quickHitBlock(s, issueUrl)).join("\n        ")}
       </div>
       <div>
         ${moneyMovesBox(moneyMoves)}
