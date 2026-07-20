@@ -236,8 +236,15 @@ async function curateContent() {
   return JSON.parse(jsonStr);
 }
 async function urlIsAlive(url) {
-  try { const res = await fetch(url, { method: "GET", redirect: "follow", signal: AbortSignal.timeout(8000) }); return res.status < 400; }
-  catch { return false; }
+  try {
+    const res = await fetch(url, {
+      method: "GET",
+      redirect: "follow",
+      signal: AbortSignal.timeout(8000),
+      headers: { "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Safari/537.36" }
+    });
+    return res.status < 400;
+  } catch { return false; }
 }
 async function validateStories(stories) {
   const kept = [];
