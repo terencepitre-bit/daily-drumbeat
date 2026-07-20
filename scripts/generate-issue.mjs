@@ -487,4 +487,50 @@ async function sendBrevoCampaign({ dateLabel, issueUrl, stories, closer }) {
   if (!createRes.ok) { console.error("Brevo campaign create failed:", await createRes.text()); return; }
   const { id } = await createRes.json();
   const sendRes = await fetch(`https://api.brevo.com/v3/emailCampaigns/${id}/sendNow`, { method: "POST", headers: { "api-key": BREVO_API_KEY } });
-  if (!sendRes.ok) console.error("Brevo send failed:", await sendRes.text()); else
+  if (!sendRes.ok) console.error("Brevo send failed:", await sendRes.text()); else console.log("Brevo campaign sent.");
+}
+
+// =========================================================
+// MAIN
+// =========================================================
+async function main() {
+  const { iso, label, dayOfYear } = todayParts(0);
+
+  const [content, moneyMoves, sports, legacy, theNumber, greenBook] = await Promise.all([
+    curateContent(), fetchMoneyMoves(), fetchSportsBox(), fetchThisDayInLegacy(), fetchTheNumber(dayOfYear), fetchGreenBook()
+  ]);
+
+  const stories = await validateStories(content.stories || []);
+  if (stories.length === 0) throw new Error("No stories passed validation today - not publishing.");
+
+  const manifestPath = path.join("issues", "manifest.json");
+  let manifest = [];
+  try { manifest = JSON.parse(await readFile(manifestPath, "utf-8")); } catch { /* first run */ }
+
+  const volume = `VOL 1 NO ${manifest.length + 1}`;
+  const issueFile = `issues/${iso}.html`;
+  const issueUrl = `${SITE_URL}/${issueFile}`;
+
+  await mkdir("issues", { recursive: true });
+  const html = todayEditionHtml({ dateLabel: label, volume, stories, closer: content.closer, moneyMoves, sports, legacy, theNumber, greenBook, issueUrl, storyCount: stories.length });
+  await writeFile(issueFile, html);       // permanent dated archive copy
+  await writeFile("today.html", html);     // stable "Today's Edition" URL
+  await writeFile("index.html", landingHtml({ dateLabel: label, volume, stories, issueUrl, storyCount: stories.length }));
+
+  manifest.unshift({ date: iso, dateLabel: label, volume, file: issueFile, storyCount: stories.length, summary: stories.map(s => s.headline).join(", ") });
+  manifest = manifest.slice(0, 90);
+  await writeFile(manifestPath, JSON.stringify(manifest, null, 2));
+  await writeFile("archive.html", archiveHtml(manifest));
+
+  await sendBrevoCampaign({ dateLabel: label, issueUrl, stories, closer: content.closer });
+
+  console.log(`Published ${issueFile} (+ today.html, index.html, archive.html) with ${stories.length} stories + closer.`);
+}
+
+export { todayEditionHtml, landingHtml, archiveHtml };
+
+// Only auto-run when executed directly (node scripts/generate-issue.mjs),
+// not when imported by a test/preview script.
+if (import.meta.url === `file://${process.argv[1]}`) {
+  main().catch(err => { console.error(err); process.exit(1); });
+}
