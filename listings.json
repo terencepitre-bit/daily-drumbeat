@@ -1,0 +1,31 @@
+{
+  "_readme": "This file is the Green Book content. Nothing in here is written by AI — it only shows what you put here. The daily script picks the first item in 'businessOfTheDay' and the first item in 'opportunities' each run (move an entry to the top to feature it, or add/remove entries any time). Delete the sample entries below before going live.",
+
+  "businessOfTheDay": [
+    {
+      "name": "SAMPLE — The Steam Bar",
+      "tagline": "Scalp-focused haircare by Judy Koloko (Detroit)",
+      "description": "Detroit-based trichology studio offering steam treatments, loc maintenance, and a new low-porosity product line. Book via Instagram, ships nationally.",
+      "cta": "Visit Business",
+      "url": "https://example.com",
+      "discountCode": "First-time clients mention Drumbeat for 15% off."
+    }
+  ],
+
+  "opportunities": [
+    {
+      "title": "SAMPLE — UNCF STEM Scholarship",
+      "amount": "$5,000",
+      "deadline": "August 1",
+      "description": "Open to sophomores+ at HBCUs majoring in STEM with 3.0+ GPA. Requires transcript + 500-word essay on community impact.",
+      "cta": "Apply",
+      "url": "https://example.com"
+    }
+  ],
+
+  "sponsorRates": {
+    "businessOfTheDay": "$75 / day featured slot",
+    "moneyMovesAdSlot": "$50 / day, 300x100",
+    "note": "Free placement available for verified Black-owned businesses in Detroit/Michigan at launch — see advertise.html."
+  }
+}

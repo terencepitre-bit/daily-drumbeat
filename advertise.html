@@ -1,0 +1,81 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Advertise — The Daily Drumbeat</title>
+<link rel="stylesheet" href="assets/drumbeat.css"></head>
+<body>
+
+  <div class="site-header">
+    <a href="index.html" class="logo">THE DAILY <span class="D">D</span>RUMBEAT</a>
+    <div class="nav">
+      <a href="index.html">Landing</a>
+      <a href="today.html">Today's Edition</a>
+      <a href="archive.html">Archive</a>
+      <a href="manifesto.html">About</a>
+      <a href="advertise.html" class="active">Advertise</a>
+    </div>
+  </div>
+
+  <div class="wrap" style="max-width:760px; padding-top:56px;">
+    <div class="tag">[ Advertise ]</div>
+    <h1 style="font-size:44px; margin-top:14px;">Reach readers who show up for Black business news every weekday.</h1>
+    <p style="font-size:16px; line-height:1.8; color:var(--muted); margin-top:20px;">
+      The Daily Drumbeat runs five curated stories and a Money Moves data box every weekday
+      morning. Sponsor slots are clearly labeled as sponsored — we never blur the line between
+      your business and our reporting.
+    </p>
+
+    <div class="rate-card">
+      <div class="tag">Business of the Day</div>
+      <div class="price">$75 / day</div>
+      <p style="color:var(--muted); font-size:14px; margin-top:8px;">One featured slot in the Green Book section of that day's edition and email: your name, a short description, and a link. Verified Black-owned businesses in Detroit/Michigan get free placement at launch — ask us.</p>
+    </div>
+    <div class="rate-card">
+      <div class="tag">Money Moves Ad Slot</div>
+      <div class="price">$50 / day</div>
+      <p style="color:var(--muted); font-size:14px; margin-top:8px;">A small 300x100 slot next to our markets and mortgage-rate data box — high-attention, finance-intent readers.</p>
+    </div>
+
+    <div style="margin-top:40px; border:1px solid var(--border); background:var(--card); padding:28px;">
+      <h3 style="margin-top:0;">Get in touch</h3>
+      <p style="font-size:14px; color:var(--muted);">Tell us a bit about your business and which slot you're interested in. We'll follow up by email to confirm details and invoicing.</p>
+
+      <!-- Netlify Forms: free, no backend code needed. Just needs data-netlify="true" and a hidden form-name input. -->
+      <form name="advertise-inquiry" method="POST" data-netlify="true" netlify-honeypot="bot-field">
+        <input type="hidden" name="form-name" value="advertise-inquiry" />
+        <p style="display:none;"><label>Don't fill this out: <input name="bot-field" /></label></p>
+
+        <div style="margin-bottom:14px;">
+          <label style="display:block; font-size:12px; letter-spacing:1px; text-transform:uppercase; color:var(--muted); margin-bottom:6px;">Business / organization name</label>
+          <input type="text" name="business" required style="width:100%; box-sizing:border-box; padding:12px 14px; border:1px solid var(--border); font-size:15px;">
+        </div>
+        <div style="margin-bottom:14px;">
+          <label style="display:block; font-size:12px; letter-spacing:1px; text-transform:uppercase; color:var(--muted); margin-bottom:6px;">Contact email</label>
+          <input type="email" name="email" required style="width:100%; box-sizing:border-box; padding:12px 14px; border:1px solid var(--border); font-size:15px;">
+        </div>
+        <div style="margin-bottom:14px;">
+          <label style="display:block; font-size:12px; letter-spacing:1px; text-transform:uppercase; color:var(--muted); margin-bottom:6px;">Interested in</label>
+          <select name="slot" style="width:100%; box-sizing:border-box; padding:12px 14px; border:1px solid var(--border); font-size:15px;">
+            <option>Business of the Day — $75/day</option>
+            <option>Money Moves Ad Slot — $50/day</option>
+            <option>Not sure yet</option>
+          </select>
+        </div>
+        <div style="margin-bottom:18px;">
+          <label style="display:block; font-size:12px; letter-spacing:1px; text-transform:uppercase; color:var(--muted); margin-bottom:6px;">Tell us about your business</label>
+          <textarea name="message" rows="4" style="width:100%; box-sizing:border-box; padding:12px 14px; border:1px solid var(--border); font-size:15px;"></textarea>
+        </div>
+        <button type="submit" style="background:var(--red); color:#fff; border:none; padding:14px 28px; font-weight:700; cursor:pointer; font-size:15px;">Send inquiry</button>
+      </form>
+    </div>
+
+    <p style="font-size:13px; color:var(--muted); margin-top:20px;">Prefer email? Reach us directly at <a href="mailto:advertise@thedailydrumbeat.com" style="color:var(--red);">advertise@thedailydrumbeat.com</a></p>
+  </div>
+
+  <div class="site-footer">
+    <div class="logo2">THE DAILY <span class="D">D</span>RUMBEAT</div>
+    <div class="fine">News about us. For us. By the beat of the drum.<br>
+      <a href="corrections.html">Corrections: corrections@thedailydrumbeat.com</a>
+      &nbsp;|&nbsp; All sources free to access &nbsp;|&nbsp; A Pitre Media publication</div>
+  </div>
+</body></html>
