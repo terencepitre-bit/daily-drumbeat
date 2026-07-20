@@ -444,11 +444,22 @@ async function resolveGreenBook(aiGreenBook) {
 // =========================================================
 function sectionLabel(code) { return STORY_SECTIONS.find(s => s.code === code)?.name || code; }
 
-function pageHead(title) {
+function pageHead(title, ogPath = "") {
+  const ogUrl = `${SITE_URL}/${ogPath}`;
   return `<!DOCTYPE html>
 <html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>${title} — ${SITE_NAME}</title>
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="${SITE_NAME}">
+<meta property="og:title" content="${SITE_NAME}">
+<meta property="og:description" content="News about us. For us. By the beat of the drum. Curated stories, Money Moves, HBCU sports, and the Green Book — every weekday morning.">
+<meta property="og:image" content="${SITE_URL}/assets/og-image.png">
+<meta property="og:url" content="${ogUrl}">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="${SITE_NAME}">
+<meta name="twitter:description" content="News about us. For us. By the beat of the drum.">
+<meta name="twitter:image" content="${SITE_URL}/assets/og-image.png">
 <link rel="stylesheet" href="assets/drumbeat.css"></head>
 <body>`;
 }
@@ -600,7 +611,7 @@ function todayEditionHtml({ dateLabel, volume, stories, closer, moneyMoves, spor
   const quickHitCount = stories.length - 1;
   const anchor = stories.find(s => s.isAnchor) || stories[0];
   const quickHits = stories.filter(s => s !== anchor);
-  return `${pageHead(dateLabel)}
+  return `${pageHead(dateLabel, "today.html")}
   ${header("today.html")}
   <div class="wrap" style="padding-top:40px;">
     <div class="hero" style="padding-top:0;">
@@ -639,7 +650,7 @@ function landingHtml({ dateLabel, volume, stories, issueUrl }) {
     ["P10", "This Day in Legacy", "A Black-history fact for today"],
     ["GB", "The Green Book", "Auto-spotlighted business + opportunity"]
   ];
-  return `${pageHead("Landing")}
+  return `${pageHead("Landing", "index.html")}
   ${header("index.html")}
   <div class="hero">
     <div class="maintitle">THE DAILY <span class="D">D</span>RUMBEAT</div>
@@ -673,7 +684,7 @@ function archiveHtml(manifest) {
       <span class="d">${e.dateLabel}</span><span class="v">${e.volume}</span><span class="c">${e.storyCount} stories &rarr;</span>
       <div class="s">${e.summary}</div>
     </a>`).join("\n    ");
-  return `${pageHead("Archive")}
+  return `${pageHead("Archive", "archive.html")}
   ${header("archive.html")}
   <div class="wrap" style="max-width:900px; padding-top:56px;">
     <h1 style="font-size:40px;">The Archive</h1>
