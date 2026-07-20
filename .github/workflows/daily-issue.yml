@@ -38,6 +38,6 @@ jobs:
         run: |
           git config user.name "Drumbeat Bot"
           git config user.email "bot@thedailydrumbeat.com"
-          git add index.html archive.html issues/
+          git add index.html today.html archive.html issues/
           git commit -m "Daily issue: $(date -u +%Y-%m-%d)" || echo "Nothing to commit"
           git push
