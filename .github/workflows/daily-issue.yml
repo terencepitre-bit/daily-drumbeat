@@ -7,7 +7,7 @@ on:
     # If you want it locked to 6am ET exactly year-round, you'd need two
     # cron lines and to disable one seasonally - most people just accept
     # the one-hour drift twice a year. See SETUP.md for the alternative.
-    - cron: "0 10 * * 1-5"
+    - cron: "17 10 * * 1-5"
   workflow_dispatch: {} # lets you click "Run workflow" manually to test
 
 permissions:
