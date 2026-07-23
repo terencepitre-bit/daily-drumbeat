@@ -1,27 +1,26 @@
-// generate-issue.mjs — anchor + quick-hits, flexible-range, overhauled Sports
+// generate-issue.mjs — briefings + quick-hits, wider Black press coverage
 //
 // Structure:
-//   1 anchor      = the day's single most significant story: longer body,
-//                   topic kicker, boxed "The takeaway," 2 sources
-//   8-12 total    = flexible range (editorial judgment, never padded to
-//                   the max, never cut short of real coverage), quick hits
-//                   are 1 sentence, <=30 words, 1 source each, no paywalls
-//   2 data desks  = Money Moves + Sports (no AI, free feeds)
-//   1 closer      = short joy/community story or quote (AI)
+//   2-3 briefings = the day's most significant stories: 50-70 word body,
+//                    topic kicker, boxed "The takeaway," 2 sources
+//   12-15 quick hits = 1 sentence, <=30 words, impact built in, 1 source
+//   13-20 total      = hard floor and ceiling on the combined count
+//   2 data desks   = Money Moves + Sports (no AI, free feeds)
+//   1 closer       = short joy/community story or quote (AI)
 //   + This Day in Legacy (standalone, no AI) + The Number (standalone, no AI)
-//   + Green Book  = auto-curated real business + real opportunity, each
+//   + Green Book   = auto-curated real business + real opportunity, each
 //     found via web_search and link-checked. Real paid entries in
 //     green-book/listings.json override the automated pick.
 //
-// Sports (P6) has three parts:
-//   - HBCU Watch: 2 real headlines from HBCU Gameday's free RSS feed,
-//     plus live HBCU scores (football/basketball/baseball) when in season,
-//     capped at 8 combined. No AI involved - RSS is just free data.
-//   - Last Night: WNBA/NBA capped at 5 each; NFL/MLB/NHL/MLS uncapped
-//     (every final score shown).
-//   - On Deck Tonight: WNBA/NBA capped at 5 each; NFL/MLB/NHL/MLS capped
-//     at 4, and replaced with a one-line summary ("MLB: full slate, 15
-//     games") when there are more than 4 scheduled.
+// NEW: 6 Black press RSS feeds (BlackPressUSA, Capital B, AFRO News,
+// Houston Defender, Washington Informer, NY Amsterdam News) are polled
+// every run and handed to Claude as real, pre-verified, paywall-free
+// leads — on top of its own web_search — to help hit the wider story
+// count with genuinely free community-press coverage.
+//
+// Sports (P6) unchanged: HBCU Watch (RSS + live scores, capped at 8),
+// Last Night / On Deck Tonight (WNBA/NBA capped at 5, others uncapped/
+// summarized).
 
 import { writeFile, readFile, mkdir } from "node:fs/promises";
 import path from "node:path";
@@ -30,8 +29,11 @@ import path from "node:path";
 const SITE_NAME = "The Daily Drumbeat";
 const SITE_URL = "https://thedailydrumbeat.com";
 const MODEL = "claude-haiku-4-5-20251001";
-const MIN_STORIES = 8;
-const MAX_STORIES = 12; // hard ceiling — never more than this regardless of news volume
+const MIN_STORIES = 13;
+const MAX_STORIES = 20; // hard ceiling — never more than this regardless of news volume
+const MIN_BRIEFINGS = 2;
+const MAX_BRIEFINGS = 3;
+const BACKUP_COUNT = 3;
 
 const ANTHROPIC_API_KEY = process.env.ANTHROPIC_API_KEY;
 const FRED_API_KEY = process.env.FRED_API_KEY;
@@ -53,6 +55,16 @@ const STORY_SECTIONS = [
 ];
 // P7 (Culture & Community) is reserved for the Closer, not a regular story.
 
+// Free, non-paywalled Black press RSS feeds - pre-verified leads for curation.
+const PRESS_FEEDS = [
+  { name: "BlackPressUSA", url: "https://blackpressusa.com/feed/" },
+  { name: "Capital B", url: "https://capitalbnews.org/feed/" },
+  { name: "AFRO News", url: "https://afro.com/feed/" },
+  { name: "Houston Defender", url: "https://defendernetwork.com/feed/" },
+  { name: "Washington Informer", url: "https://washingtoninformer.com/feed/" },
+  { name: "NY Amsterdam News", url: "https://amsterdamnews.com/feed/" }
+];
+
 function todayParts(offsetDays = 0) {
   const now = new Date(Date.now() + offsetDays * 86400000);
   const iso = now.toISOString().slice(0, 10);
@@ -71,6 +83,32 @@ async function safeFetchJson(url, opts = {}, label = url) {
     console.warn(`[data] ${label} failed: ${err.message}`);
     return null;
   }
+}
+
+// Generic RSS reader - used for both HBCU Gameday and the 6 press feeds.
+async function fetchRssHeadlines(url, sourceName, limit = 4) {
+  try {
+    const res = await fetch(url, {
+      signal: AbortSignal.timeout(10000),
+      headers: { "User-Agent": "Mozilla/5.0 (compatible; DailyDrumbeatBot/1.0; +https://thedailydrumbeat.com)" }
+    });
+    if (!res.ok) throw new Error(`${res.status}`);
+    const xml = await res.text();
+    const items = [...xml.matchAll(/<item>([\s\S]*?)<\/item>/g)].slice(0, limit);
+    return items.map(([, block]) => {
+      const titleMatch = block.match(/<title>(?:<!\[CDATA\[)?(.*?)(?:\]\]>)?<\/title>/s);
+      const linkMatch = block.match(/<link>(.*?)<\/link>/s);
+      return { title: (titleMatch?.[1] || "").trim(), url: (linkMatch?.[1] || "").trim(), source: sourceName };
+    }).filter(h => h.title && h.url);
+  } catch (err) {
+    console.warn(`[data] RSS ${sourceName} failed: ${err.message}`);
+    return [];
+  }
+}
+
+async function fetchPressLeads() {
+  const results = await Promise.all(PRESS_FEEDS.map(f => fetchRssHeadlines(f.url, f.name, 4)));
+  return results.flat();
 }
 
 // =========================================================
@@ -143,12 +181,10 @@ const HBCU_PATHS = [
   "basketball/womens-college-basketball",
   "baseball/college-baseball"
 ];
-// WNBA/NBA: capped at 5 for both last-night and on-deck.
 const CAPPED_LEAGUES = [
   { path: "basketball/nba", label: "NBA" },
   { path: "basketball/wnba", label: "WNBA" }
 ];
-// Everyone else: last-night uncapped, on-deck capped at 4 or summarized.
 const GENERAL_LEAGUES = [
   { path: "football/nfl", label: "NFL" },
   { path: "baseball/mlb", label: "MLB" },
@@ -169,27 +205,6 @@ function summarizeGame(ev) {
   const scoreStr = state === "pre" ? "" : ` ${a.score}-${b.score}`;
   const when = state === "pre" ? ` (${new Date(ev.date).toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" })} ET)` : state === "in" ? " (live)" : " (final)";
   return `${a.team.shortDisplayName} vs ${b.team.shortDisplayName}${scoreStr}${when}`;
-}
-
-// Free HBCU sports news via HBCU Gameday's public RSS feed - no AI, no key.
-async function fetchHbcuGamedayHeadlines(limit = 2) {
-  try {
-    const res = await fetch("https://hbcugameday.com/feed", {
-      signal: AbortSignal.timeout(10000),
-      headers: { "User-Agent": "Mozilla/5.0 (compatible; DailyDrumbeatBot/1.0; +https://thedailydrumbeat.com)" }
-    });
-    if (!res.ok) throw new Error(`${res.status}`);
-    const xml = await res.text();
-    const items = [...xml.matchAll(/<item>([\s\S]*?)<\/item>/g)].slice(0, limit);
-    return items.map(([, block]) => {
-      const titleMatch = block.match(/<title>(?:<!\[CDATA\[)?(.*?)(?:\]\]>)?<\/title>/s);
-      const linkMatch = block.match(/<link>(.*?)<\/link>/s);
-      return { title: (titleMatch?.[1] || "").trim(), url: (linkMatch?.[1] || "").trim() };
-    }).filter(h => h.title && h.url);
-  } catch (err) {
-    console.warn(`[data] HBCU Gameday RSS failed: ${err.message}`);
-    return [];
-  }
 }
 
 async function fetchGeneralLeagueLines(league, todayIso, yestIso) {
@@ -225,7 +240,7 @@ async function fetchSportsBox() {
   const [hbcuToday, hbcuYest, hbcuHeadlines, generalResults, cappedResults] = await Promise.all([
     Promise.all(HBCU_PATHS.map(p => fetchEspnScoreboard(p, todayIso))),
     Promise.all(HBCU_PATHS.map(p => fetchEspnScoreboard(p, yestIso))),
-    fetchHbcuGamedayHeadlines(2),
+    fetchRssHeadlines("https://hbcugameday.com/feed", "HBCU Gameday", 2),
     Promise.all(GENERAL_LEAGUES.map(l => fetchGeneralLeagueLines(l, todayIso, yestIso))),
     Promise.all(CAPPED_LEAGUES.map(l => fetchCappedLeagueLines(l, todayIso, yestIso)))
   ]);
@@ -278,40 +293,45 @@ async function fetchManualGreenBook() {
 // =========================================================
 // EVERYTHING BELOW CALLS CLAUDE
 // =========================================================
-const CURATION_PROMPT = `You are the morning content curator for ${SITE_NAME}, a free daily newsletter
+function buildCurationPrompt(pressLeads) {
+  const leadsBlock = pressLeads.length
+    ? `\nHere are real, freely-accessible headlines pulled just now from Black press RSS feeds - already confirmed real (not invented), no paywalls. Use these as strong leads where relevant; search further into any of them, or use your own web_search for anything else:\n${pressLeads.map(l => `- "${l.title}" — ${l.source} — ${l.url}`).join("\n")}\n`
+    : "";
+
+  return `You are the morning content curator for ${SITE_NAME}, a free daily newsletter
 covering news that materially affects Black America.
 
 Use the web_search tool. Never invent a URL — only cite URLs that actually appeared in your
-own web_search results this run.
+own web_search results or in the press leads list below this run.
+${leadsBlock}
+PART 1 — Curate between ${MIN_STORIES} and ${MAX_STORIES} stories total, made up of two kinds:
 
-PART 1 — Curate between ${MIN_STORIES} and ${MAX_STORIES} stories total, using editorial
-judgment: cover these core beats (Policy & Justice MUST appear at least once, even on a slow
-news day), and only go beyond ${MIN_STORIES} when there is genuinely enough real, substantive
-news to justify it. Never pad to hit ${MAX_STORIES}, and never cut a real story just to land on
-a round number.
+BRIEFINGS (${MIN_BRIEFINGS}-${MAX_BRIEFINGS} of them): the day's most significant stories.
+Mark each with "isBriefing": true. Each briefing gets:
+- a short topic "kicker" label in all caps (e.g. "GOVERNMENT WATCH", "MARKET WATCH")
+- a body: 50-70 words, 2-3 sentences
+- a "takeaway": one sharp sentence on why this matters, for a boxed callout
+- exactly 2 sources
+
+QUICK HITS (fill the rest, roughly 12-15 of them, so the TOTAL lands between ${MIN_STORIES}
+and ${MAX_STORIES}): exactly ONE sentence, **30 words or fewer**, with the impact or stakes
+built directly into that sentence (not just a fact — say why it matters in the same breath).
+Exactly 1 source each, freely accessible, no paywall.
+
+Cover these core beats across your briefings + quick hits (Policy & Justice MUST appear at
+least once, even on a slow news day):
 ${STORY_SECTIONS.map(s => `- ${s.code}: ${s.name}${s.required ? " (required every day)" : ""}`).join("\n")}
-If a beat has more real news than usual (a big Black Excellence day, for example), it's fine
-to cover it with 2-3 stories instead of 1.
+A beat can get multiple stories on a big day (e.g. 2-3 Black Excellence items). Never pad
+with filler to hit the max, and never cut real coverage just to land under it.
 
 IMPORTANT — every source, for every story, must be freely accessible with no paywall. Do not
 cite outlets you know sit behind a hard paywall (e.g. WSJ subscriber-only pieces). If the only
 coverage of something is paywalled, either find a freely-accessible outlet covering the same
 story or skip that story.
 
-Of these stories, choose exactly ONE to be "the anchor" — whichever is genuinely the
-most significant story of the day. Mark it with "isAnchor": true. The anchor gets:
-- a short topic "kicker" label in all caps (e.g. "GOVERNMENT WATCH", "MARKET WATCH")
-- a fuller body: 80-120 words, 2-3 sentences
-- a "takeaway": one sharp sentence on why this matters, for a boxed callout
-- exactly 2 sources
-
-Every other story is a "quick hit": exactly ONE sentence, **30 words or fewer**, with the
-impact or stakes built directly into that sentence (not just a fact — say why it matters in
-the same breath). Exactly 1 source each, freely accessible, no paywall.
-
-PART 2 — Also write exactly 2 backup quick hits (any category, 1 source each, never the
-anchor, freely accessible) to be used only if a primary story's source fails a later
-link-check.
+PART 2 — Also write exactly ${BACKUP_COUNT} backup quick hits (any category, 1 source each,
+never a briefing, freely accessible) to be used only if a primary story's source fails a
+later link-check.
 
 PART 3 — Curate exactly 1 "closer": a short uplifting Culture & Community or Health &
 Wellness item, OR a brief attributed quote (under 15 words, from a real Black figure). 1 source
@@ -325,14 +345,14 @@ with a real URL. Return null for either if you can't find a genuinely real, veri
 Output ONLY valid JSON, no markdown fences, no commentary, exactly this shape:
 {
   "stories": [
-    { "section": "P2", "isAnchor": true, "headline": "...", "kicker": "GOVERNMENT WATCH",
-      "body": "80-120 words...", "takeaway": "one sharp sentence",
+    { "section": "P2", "isBriefing": true, "headline": "...", "kicker": "GOVERNMENT WATCH",
+      "body": "50-70 words...", "takeaway": "one sharp sentence",
       "sources": [{"name":"...","url":"..."},{"name":"...","url":"..."}] },
-    { "section": "P1", "isAnchor": false, "headline": "...", "quickHit": "one sentence, <=30 words, impact built in",
+    { "section": "P1", "isBriefing": false, "headline": "...", "quickHit": "one sentence, <=30 words, impact built in",
       "sources": [{"name":"...","url":"..."}] }
   ],
   "backups": [
-    { "section": "P3", "isAnchor": false, "headline": "...", "quickHit": "...",
+    { "section": "P3", "isBriefing": false, "headline": "...", "quickHit": "...",
       "sources": [{"name":"...","url":"..."}] }
   ],
   "closer": {
@@ -347,22 +367,24 @@ Output ONLY valid JSON, no markdown fences, no commentary, exactly this shape:
 }
 
 Rules:
-- Between ${MIN_STORIES} and ${MAX_STORIES} stories, exactly one with isAnchor true, exactly 2 backups.
-- Anchor: exactly 2 sources. Quick hits and backups: exactly 1 source each.
+- Between ${MIN_STORIES} and ${MAX_STORIES} stories total, ${MIN_BRIEFINGS}-${MAX_BRIEFINGS} with isBriefing true, exactly ${BACKUP_COUNT} backups.
+- Briefings: exactly 2 sources. Quick hits and backups: exactly 1 source each.
 - Every source is freely accessible — no paywalls, ever.
 - All text is original wording, never a close paraphrase of source wording.
 - No opinion pieces presented as news, no tabloid gossip, no fabricated businesses or grants.
 - Headlines under 12 words. Quick hit sentences: 30 words maximum.`;
+}
 
-async function curateContent() {
+async function curateContent(pressLeads) {
   const { label } = todayParts(0);
+  const prompt = buildCurationPrompt(pressLeads);
   const res = await fetch("https://api.anthropic.com/v1/messages", {
     method: "POST",
     headers: { "content-type": "application/json", "x-api-key": ANTHROPIC_API_KEY, "anthropic-version": "2023-06-01" },
     body: JSON.stringify({
-      model: MODEL, max_tokens: 7000, system: CURATION_PROMPT,
-      messages: [{ role: "user", content: `Today is ${label}. Curate today's ${MIN_STORIES}-${MAX_STORIES} stories (with 1 anchor), 2 backups, 1 closer, and the Green Book now.` }],
-      tools: [{ type: "web_search_20250305", name: "web_search", max_uses: 35 }]
+      model: MODEL, max_tokens: 9000, system: prompt,
+      messages: [{ role: "user", content: `Today is ${label}. Curate today's ${MIN_STORIES}-${MAX_STORIES} stories (${MIN_BRIEFINGS}-${MAX_BRIEFINGS} briefings + quick hits), ${BACKUP_COUNT} backups, 1 closer, and the Green Book now.` }],
+      tools: [{ type: "web_search_20250305", name: "web_search", max_uses: 45 }]
     })
   });
   if (!res.ok) throw new Error(`Anthropic API error ${res.status}: ${await res.text()}`);
@@ -388,7 +410,7 @@ async function urlIsAlive(url) {
 async function validateStories(stories) {
   const kept = [];
   for (const s of stories || []) {
-    const minSources = s.isAnchor ? 2 : 1;
+    const minSources = s.isBriefing ? 2 : 1;
     if (!s.sources || s.sources.length < minSources) continue;
     const checks = await Promise.all(s.sources.map(src => urlIsAlive(src.url)));
     if (checks.every(Boolean)) kept.push(s); else console.warn(`Dropped "${s.headline}" - a source link failed`);
@@ -400,9 +422,11 @@ function assembleStories(validPrimaries, validBackups) {
   const usedHeadlines = new Set();
   const final = [];
 
-  let anchor = validPrimaries.find(s => s.isAnchor);
-  if (anchor) { final.push(anchor); usedHeadlines.add(anchor.headline); }
+  // Keep all validated briefings (target 2-3, but take whatever survived).
+  const briefings = validPrimaries.filter(s => s.isBriefing).slice(0, MAX_BRIEFINGS);
+  for (const b of briefings) { final.push(b); usedHeadlines.add(b.headline); }
 
+  // Add remaining valid primaries (quick hits).
   for (const s of validPrimaries) {
     if (usedHeadlines.has(s.headline)) continue;
     final.push(s); usedHeadlines.add(s.headline);
@@ -416,8 +440,10 @@ function assembleStories(validPrimaries, validBackups) {
     final.push(s); usedHeadlines.add(s.headline);
   }
 
-  if (!final.some(s => s.isAnchor) && final.length) {
-    final[0] = { ...final[0], isAnchor: true, kicker: final[0].kicker || "TODAY'S TOP STORY", body: final[0].body || final[0].quickHit, takeaway: final[0].takeaway || null };
+  // If no briefing survived validation at all, promote the strongest
+  // remaining story so the edition always has at least one.
+  if (!final.some(s => s.isBriefing) && final.length) {
+    final[0] = { ...final[0], isBriefing: true, kicker: final[0].kicker || "TODAY'S TOP STORY", body: final[0].body || final[0].quickHit, takeaway: final[0].takeaway || null };
   }
 
   return final.slice(0, MAX_STORIES); // hard ceiling, regardless of how much validated
@@ -479,11 +505,11 @@ function footer() {
   </div>`;
 }
 
-function anchorBlock(s, issueUrl) {
+function briefingBlock(s, issueUrl) {
   const sources = s.sources.map(src => `<a href="${src.url}" target="_blank" rel="noopener" class="pill">[${src.name}]</a>`).join(" ");
   const shareText = `${s.headline} — via thedailydrumbeat.com ${issueUrl}`.replace(/'/g, "&#39;");
   return `<div class="story anchor-story">
-    <div class="tag">[ ${s.section} &middot; ${sectionLabel(s.section).toUpperCase()} &middot; THE ANCHOR ]</div>
+    <div class="tag">[ ${s.section} &middot; ${sectionLabel(s.section).toUpperCase()} &middot; BRIEFING ]</div>
     <h2>${s.headline}</h2>
     <p>${s.kicker ? `<b>${s.kicker} &mdash; </b>` : ""}${s.body}</p>
     ${s.takeaway ? `<div class="takeaway"><div class="takeaway-label">The takeaway</div>${s.takeaway}</div>` : ""}
@@ -610,9 +636,8 @@ function closerBlock(closer, issueUrl) {
 }
 
 function todayEditionHtml({ dateLabel, volume, stories, closer, moneyMoves, sports, legacy, theNumber, greenBook, issueUrl }) {
-  const quickHitCount = stories.length - 1;
-  const anchor = stories.find(s => s.isAnchor) || stories[0];
-  const quickHits = stories.filter(s => s !== anchor);
+  const briefings = stories.filter(s => s.isBriefing);
+  const quickHits = stories.filter(s => !s.isBriefing);
   return `${pageHead(dateLabel, "today.html")}
   ${header("today.html")}
   <div class="wrap" style="padding-top:40px;">
@@ -623,8 +648,8 @@ function todayEditionHtml({ dateLabel, volume, stories, closer, moneyMoves, spor
 
     <div class="two-col" style="margin-top:40px;">
       <div>
-        ${anchorBlock(anchor, issueUrl)}
-        <div class="quick-hits-label">The quick ${quickHitCount}</div>
+        ${briefings.map(s => briefingBlock(s, issueUrl)).join("\n        ")}
+        <div class="quick-hits-label">The quick ${quickHits.length}</div>
         ${quickHits.map(s => quickHitBlock(s, issueUrl)).join("\n        ")}
       </div>
       <div>
@@ -643,8 +668,8 @@ function todayEditionHtml({ dateLabel, volume, stories, closer, moneyMoves, spor
 }
 
 function landingHtml({ dateLabel, volume, stories, issueUrl }) {
-  const anchor = stories.find(s => s.isAnchor) || stories[0];
-  const summary = [anchor, ...stories.filter(s => s !== anchor).slice(0, 3)].map(s => s.headline).join(", ");
+  const briefings = stories.filter(s => s.isBriefing);
+  const summary = [...briefings, ...stories.filter(s => !s.isBriefing)].slice(0, 4).map(s => s.headline).join(", ");
   const sectionCards = [
     ...stories.map(s => [s.section, sectionLabel(s.section), s.headline]),
     ["P4", "Money Moves", "Markets &middot; Mortgage &middot; Crypto"],
@@ -702,17 +727,17 @@ function archiveHtml(manifest) {
 // =========================================================
 async function sendBrevoCampaign({ dateLabel, issueUrl, stories, closer }) {
   if (!BREVO_API_KEY || !BREVO_LIST_ID || !BREVO_SENDER_EMAIL) { console.warn("Brevo env vars missing - skipping email send."); return; }
-  const anchor = stories.find(s => s.isAnchor) || stories[0];
-  const quickHits = stories.filter(s => s !== anchor);
+  const briefings = stories.filter(s => s.isBriefing);
+  const quickHits = stories.filter(s => !s.isBriefing);
   const htmlContent = `<div style="font-family:Georgia,serif; max-width:600px; margin:0 auto;">
     <h1 style="color:#8E2A2B;">The Daily Drumbeat — ${dateLabel}</h1>
-    <div style="margin-bottom:24px;">
-      <div style="font-size:12px; color:#8E2A2B; text-transform:uppercase; letter-spacing:1px;">${sectionLabel(anchor.section)} &middot; The Anchor</div>
+    ${briefings.map(anchor => `<div style="margin-bottom:24px;">
+      <div style="font-size:12px; color:#8E2A2B; text-transform:uppercase; letter-spacing:1px;">${sectionLabel(anchor.section)} &middot; Briefing</div>
       <h2 style="font-family:Georgia,serif; margin:6px 0;">${anchor.headline}</h2>
       <p style="font-family:Helvetica,Arial,sans-serif; font-size:15px; line-height:1.6;">${anchor.kicker ? `<b>${anchor.kicker} — </b>` : ""}${anchor.body}</p>
       ${anchor.takeaway ? `<p style="background:#F7F3EC; padding:10px 14px; font-size:14px;"><b>The takeaway:</b> ${anchor.takeaway}</p>` : ""}
       <p style="font-size:13px; color:#6E6A60;">Sources: ${anchor.sources.map(src => `<a href="${src.url}">${src.name}</a>`).join(" &middot; ")}</p>
-    </div>
+    </div>`).join("")}
     ${quickHits.map(s => `<div style="margin-bottom:14px;">
       <div style="font-size:11px; color:#8E2A2B; text-transform:uppercase; letter-spacing:1px;">${sectionLabel(s.section)}</div>
       <p style="font-family:Helvetica,Arial,sans-serif; font-size:14px; line-height:1.5;">${s.quickHit || s.body} <a href="${s.sources[0].url}" style="font-size:12px;">[${s.sources[0].name}]</a></p>
@@ -737,8 +762,9 @@ async function sendBrevoCampaign({ dateLabel, issueUrl, stories, closer }) {
 async function main() {
   const { iso, label, dayOfYear } = todayParts(0);
 
+  const pressLeads = await fetchPressLeads();
   const [content, moneyMoves, sports, legacy, theNumber] = await Promise.all([
-    curateContent(), fetchMoneyMoves(), fetchSportsBox(), fetchThisDayInLegacy(), fetchTheNumber(dayOfYear)
+    curateContent(pressLeads), fetchMoneyMoves(), fetchSportsBox(), fetchThisDayInLegacy(), fetchTheNumber(dayOfYear)
   ]);
 
   const validPrimaries = await validateStories(content.stories);
@@ -769,7 +795,8 @@ async function main() {
 
   await sendBrevoCampaign({ dateLabel: label, issueUrl, stories, closer: content.closer });
 
-  console.log(`Published ${issueFile} with ${stories.length} stories (target ${MIN_STORIES}-${MAX_STORIES}, 1 anchor) + closer + Green Book.`);
+  const briefingCount = stories.filter(s => s.isBriefing).length;
+  console.log(`Published ${issueFile} with ${stories.length} stories (target ${MIN_STORIES}-${MAX_STORIES}), ${briefingCount} briefings, + closer + Green Book. ${pressLeads.length} press leads fetched.`);
 }
 
 export { todayEditionHtml, landingHtml, archiveHtml };
