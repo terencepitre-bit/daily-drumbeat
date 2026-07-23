@@ -1,26 +1,24 @@
-// generate-issue.mjs — briefings + quick-hits, wider Black press coverage
+// generate-issue.mjs — safety-net closer, validated Legacy, capped sports
 //
-// Structure:
-//   2-3 briefings = the day's most significant stories: 50-70 word body,
-//                    topic kicker, boxed "The takeaway," 2 sources
-//   12-15 quick hits = 1 sentence, <=30 words, impact built in, 1 source
-//   13-20 total      = hard floor and ceiling on the combined count
+// Structure (unchanged from last round):
+//   2-3 briefings + quick hits = 13-20 total stories
 //   2 data desks   = Money Moves + Sports (no AI, free feeds)
-//   1 closer       = short joy/community story or quote (AI)
-//   + This Day in Legacy (standalone, no AI) + The Number (standalone, no AI)
-//   + Green Book   = auto-curated real business + real opportunity, each
-//     found via web_search and link-checked. Real paid entries in
-//     green-book/listings.json override the automated pick.
+//   1 closer       = short joy/community story or quote (AI, now with a
+//                     content filter + curated fallback so it can never
+//                     land on a somber/tragic quote)
+//   1 Legacy       = NOW curated + link-checked by Claude (was a Wikipedia
+//                     keyword scan before, which occasionally produced
+//                     unrelated results like a Greek wildfire)
+//   1 The Number   = standalone, no AI
+//   + Green Book   = auto-curated real business + real opportunity, real
+//     paid entries in green-book/listings.json override the automated pick
+//     (this file is now genuinely empty - the placeholder bug is fixed)
 //
-// NEW: 6 Black press RSS feeds (BlackPressUSA, Capital B, AFRO News,
-// Houston Defender, Washington Informer, NY Amsterdam News) are polled
-// every run and handed to Claude as real, pre-verified, paywall-free
-// leads — on top of its own web_search — to help hit the wider story
-// count with genuinely free community-press coverage.
-//
-// Sports (P6) unchanged: HBCU Watch (RSS + live scores, capped at 8),
-// Last Night / On Deck Tonight (WNBA/NBA capped at 5, others uncapped/
-// summarized).
+// Sports (P6): HBCU Watch (RSS + live scores, capped at 8) stays the
+// centerpiece. General pro leagues (NFL/MLB/NHL/MLS) are now capped at 4
+// games for BOTH Last Night and On Deck (previously Last Night was
+// unbounded, which produced a 38-line wall of scores). WNBA/NBA stay
+// capped at 5 each, unchanged.
 
 import { writeFile, readFile, mkdir } from "node:fs/promises";
 import path from "node:path";
@@ -30,10 +28,11 @@ const SITE_NAME = "The Daily Drumbeat";
 const SITE_URL = "https://thedailydrumbeat.com";
 const MODEL = "claude-haiku-4-5-20251001";
 const MIN_STORIES = 13;
-const MAX_STORIES = 20; // hard ceiling — never more than this regardless of news volume
+const MAX_STORIES = 20;
 const MIN_BRIEFINGS = 2;
 const MAX_BRIEFINGS = 3;
 const BACKUP_COUNT = 3;
+const GENERAL_LEAGUE_CAP = 4; // applies to both Last Night and On Deck now
 
 const ANTHROPIC_API_KEY = process.env.ANTHROPIC_API_KEY;
 const FRED_API_KEY = process.env.FRED_API_KEY;
@@ -45,7 +44,7 @@ const BREVO_SENDER_NAME = process.env.BREVO_SENDER_NAME || SITE_NAME;
 
 const STORY_SECTIONS = [
   { code: "P1", name: "Business & Enterprise", required: false },
-  { code: "P2", name: "Policy & Justice", required: true }, // must run every day
+  { code: "P2", name: "Policy & Justice", required: true },
   { code: "P3", name: "Economy & Work", required: false },
   { code: "P5", name: "HBCUs & Education", required: false },
   { code: "P8", name: "Tech & Innovation", required: false },
@@ -55,7 +54,6 @@ const STORY_SECTIONS = [
 ];
 // P7 (Culture & Community) is reserved for the Closer, not a regular story.
 
-// Free, non-paywalled Black press RSS feeds - pre-verified leads for curation.
 const PRESS_FEEDS = [
   { name: "BlackPressUSA", url: "https://blackpressusa.com/feed/" },
   { name: "Capital B", url: "https://capitalbnews.org/feed/" },
@@ -64,6 +62,26 @@ const PRESS_FEEDS = [
   { name: "Washington Informer", url: "https://washingtoninformer.com/feed/" },
   { name: "NY Amsterdam News", url: "https://amsterdamnews.com/feed/" }
 ];
+
+// Curated safety-net quotes for the Closer - used whenever the AI's pick
+// fails the uplift filter, or provides nothing. Repeats over time are fine.
+const FALLBACK_QUOTES = [
+  { text: "Lifting as we climb.", attribution: "National Association of Colored Women's Clubs motto, 1896" },
+  { text: "Each one, teach one.", attribution: "Traditional African American proverb" },
+  { text: "If there is no struggle, there is no progress.", attribution: "Frederick Douglass" },
+  { text: "The time is always right to do what is right.", attribution: "Martin Luther King Jr." },
+  { text: "We may encounter many defeats but we must not be defeated.", attribution: "Maya Angelou" },
+  { text: "Freedom is never given; it is won.", attribution: "A. Philip Randolph" },
+  { text: "Get in good trouble, necessary trouble.", attribution: "John Lewis" },
+  { text: "Excellence is the best deterrent to racism.", attribution: "Oprah Winfrey" },
+  { text: "The soul that is within me no man can degrade.", attribution: "Frederick Douglass" },
+  { text: "Service is the price we pay for the privilege of living on this earth.", attribution: "Shirley Chisholm" },
+  { text: "When you know better, do better.", attribution: "Maya Angelou" },
+  { text: "We can disagree and still love each other.", attribution: "James Baldwin" }
+];
+// Words that disqualify an AI-provided closer from publishing - if any of
+// these appear, we fall back to the curated list instead.
+const SOMBER_KEYWORDS = /\b(died|death|dies|dying|kill|killed|killing|murder|shoot|shot|funeral|grief|griev|tragedy|tragic|victim|mourn|mourning|autopsy|violence|abuse|assault|suicide|fatal|crash|accident|hospitali[sz]ed|wound(ed)?|attack(ed)?)\b/i;
 
 function todayParts(offsetDays = 0) {
   const now = new Date(Date.now() + offsetDays * 86400000);
@@ -85,7 +103,6 @@ async function safeFetchJson(url, opts = {}, label = url) {
   }
 }
 
-// Generic RSS reader - used for both HBCU Gameday and the 6 press feeds.
 async function fetchRssHeadlines(url, sourceName, limit = 4) {
   try {
     const res = await fetch(url, {
@@ -163,7 +180,8 @@ async function fetchMoneyMoves() {
 }
 
 // =========================================================
-// SPORTS — HBCU Watch (RSS + live scores) + capped major leagues
+// SPORTS — HBCU Watch stays the centerpiece; general leagues now
+// capped at GENERAL_LEAGUE_CAP for BOTH Last Night and On Deck.
 // =========================================================
 const HBCU_SCHOOLS = [
   "Alabama A&M", "Alabama State", "Alcorn State", "Arkansas-Pine Bluff", "Bethune-Cookman",
@@ -207,19 +225,23 @@ function summarizeGame(ev) {
   return `${a.team.shortDisplayName} vs ${b.team.shortDisplayName}${scoreStr}${when}`;
 }
 
+// Same cap-or-summarize treatment now applied to BOTH last night and on
+// deck for general leagues (previously last night was unbounded).
+function capOrSummarize(events, label) {
+  if (events.length > GENERAL_LEAGUE_CAP) return [`${label}: full slate, ${events.length} games`];
+  return events.map(summarizeGame).filter(Boolean).map(g => `${label}: ${g}`);
+}
 async function fetchGeneralLeagueLines(league, todayIso, yestIso) {
   const [yestGames, todayGames] = await Promise.all([
     fetchEspnScoreboard(league.path, yestIso),
     fetchEspnScoreboard(league.path, todayIso)
   ]);
-  const lastNight = yestGames.filter(ev => ev.status?.type?.state === "post")
-    .map(summarizeGame).filter(Boolean).map(g => `${league.label}: ${g}`); // uncapped
-
+  const finals = yestGames.filter(ev => ev.status?.type?.state === "post");
   const scheduled = todayGames.filter(ev => ev.status?.type?.state === "pre");
-  const onDeck = scheduled.length > 4
-    ? [`${league.label}: full slate, ${scheduled.length} games`]
-    : scheduled.map(summarizeGame).filter(Boolean).map(g => `${league.label}: ${g}`);
-  return { lastNight, onDeck };
+  return {
+    lastNight: capOrSummarize(finals, league.label),
+    onDeck: capOrSummarize(scheduled, league.label)
+  };
 }
 async function fetchCappedLeagueLines(league, todayIso, yestIso) {
   const [yestGames, todayGames] = await Promise.all([
@@ -260,16 +282,6 @@ async function fetchSportsBox() {
   };
 }
 
-const LEGACY_KEYWORDS = /african|black|slave|civil rights|jim crow|naacp|segregat|harlem renaissance|negro|colored|freedmen|apartheid|jamaica|haiti|caribbean|pan-african|reparations|underground railroad/i;
-async function fetchThisDayInLegacy() {
-  const { mm, dd } = todayParts(0);
-  const data = await safeFetchJson(`https://en.wikipedia.org/api/rest_v1/feed/onthisday/events/${mm}/${dd}`, { headers: { "User-Agent": `${SITE_NAME} (${SITE_URL})` } }, "Wikipedia On This Day");
-  if (!data) return null;
-  const hit = (data.events || []).find(e => LEGACY_KEYWORDS.test(e.text || "") || (e.pages || []).some(p => LEGACY_KEYWORDS.test(p.extract || p.description || "")));
-  if (!hit) return null;
-  const link = hit.pages?.[0]?.content_urls?.desktop?.page || "https://en.wikipedia.org/wiki/Portal:Black_history";
-  return { year: hit.year, text: hit.text, url: link, sourceName: "Wikipedia · On This Day" };
-}
 async function fetchTheNumber(dayOfYear) {
   if (dayOfYear % 2 === 0) {
     const m = await fredLatest("MORTGAGE30US");
@@ -321,23 +333,29 @@ Exactly 1 source each, freely accessible, no paywall.
 Cover these core beats across your briefings + quick hits (Policy & Justice MUST appear at
 least once, even on a slow news day):
 ${STORY_SECTIONS.map(s => `- ${s.code}: ${s.name}${s.required ? " (required every day)" : ""}`).join("\n")}
-A beat can get multiple stories on a big day (e.g. 2-3 Black Excellence items). Never pad
-with filler to hit the max, and never cut real coverage just to land under it.
+A beat can get multiple stories on a big day. Never pad with filler to hit the max, and never
+cut real coverage just to land under it.
 
-IMPORTANT — every source, for every story, must be freely accessible with no paywall. Do not
-cite outlets you know sit behind a hard paywall (e.g. WSJ subscriber-only pieces). If the only
-coverage of something is paywalled, either find a freely-accessible outlet covering the same
-story or skip that story.
+IMPORTANT — every source, for every story, must be freely accessible with no paywall.
 
 PART 2 — Also write exactly ${BACKUP_COUNT} backup quick hits (any category, 1 source each,
 never a briefing, freely accessible) to be used only if a primary story's source fails a
 later link-check.
 
-PART 3 — Curate exactly 1 "closer": a short uplifting Culture & Community or Health &
-Wellness item, OR a brief attributed quote (under 15 words, from a real Black figure). 1 source
-if it's a story, 0 if it's a quote.
+PART 3 — Curate exactly 1 "closer". This MUST be genuinely uplifting, joyful, or
+community-affirming — never tied to a death, tragedy, crime, or any heavy/somber news from
+today's stories. Either: a short Culture & Community or Health & Wellness item celebrating
+something positive, OR a brief attributed quote (under 15 words, from a real historical or
+contemporary Black figure, on themes of hope/resilience/joy/community). 1 source if it's a
+story, 0 if it's a quote. Do not reuse or reference anything from the somber parts of today's
+news for this.
 
-PART 4 — Green Book: find ONE real, currently-operating Black-owned business worth
+PART 4 — This Day in Legacy: find ONE real, verifiable event in Black history that happened
+on today's calendar date (month and day, any year) — a real milestone, achievement,
+founding, or historic moment. Must come from an actual web_search result with a real URL.
+Return null if you cannot find a genuinely real, verifiable one for today's specific date.
+
+PART 5 — Green Book: find ONE real, currently-operating Black-owned business worth
 spotlighting, and ONE real, currently-open opportunity (scholarship, grant, fellowship,
 program) for Black students/entrepreneurs. Both must come from an actual web_search result
 with a real URL. Return null for either if you can't find a genuinely real, verifiable one.
@@ -360,6 +378,7 @@ Output ONLY valid JSON, no markdown fences, no commentary, exactly this shape:
     "text": "the blurb (1-2 sentences) or the quote itself",
     "attribution": "only if type is quote", "sources": [{"name":"...","url":"..."}]
   },
+  "legacy": { "year": 1903, "text": "...", "url": "...", "sourceName": "..." } or null,
   "greenBook": {
     "business": { "name":"...", "tagline":"...", "description":"25-50 words", "url":"...", "sourceName":"..." } or null,
     "opportunity": { "title":"...", "amount":"...", "deadline":"...", "description":"25-50 words", "url":"...", "sourceName":"..." } or null
@@ -383,7 +402,7 @@ async function curateContent(pressLeads) {
     headers: { "content-type": "application/json", "x-api-key": ANTHROPIC_API_KEY, "anthropic-version": "2023-06-01" },
     body: JSON.stringify({
       model: MODEL, max_tokens: 9000, system: prompt,
-      messages: [{ role: "user", content: `Today is ${label}. Curate today's ${MIN_STORIES}-${MAX_STORIES} stories (${MIN_BRIEFINGS}-${MAX_BRIEFINGS} briefings + quick hits), ${BACKUP_COUNT} backups, 1 closer, and the Green Book now.` }],
+      messages: [{ role: "user", content: `Today is ${label}. Curate today's ${MIN_STORIES}-${MAX_STORIES} stories (${MIN_BRIEFINGS}-${MAX_BRIEFINGS} briefings + quick hits), ${BACKUP_COUNT} backups, 1 closer, This Day in Legacy, and the Green Book now.` }],
       tools: [{ type: "web_search_20250305", name: "web_search", max_uses: 45 }]
     })
   });
@@ -422,31 +441,61 @@ function assembleStories(validPrimaries, validBackups) {
   const usedHeadlines = new Set();
   const final = [];
 
-  // Keep all validated briefings (target 2-3, but take whatever survived).
   const briefings = validPrimaries.filter(s => s.isBriefing).slice(0, MAX_BRIEFINGS);
   for (const b of briefings) { final.push(b); usedHeadlines.add(b.headline); }
 
-  // Add remaining valid primaries (quick hits).
   for (const s of validPrimaries) {
     if (usedHeadlines.has(s.headline)) continue;
     final.push(s); usedHeadlines.add(s.headline);
   }
 
-  // Top up from backups only if we're below the minimum - never pad
-  // just to reach the max.
   for (const s of validBackups) {
     if (final.length >= MIN_STORIES) break;
     if (usedHeadlines.has(s.headline)) continue;
     final.push(s); usedHeadlines.add(s.headline);
   }
 
-  // If no briefing survived validation at all, promote the strongest
-  // remaining story so the edition always has at least one.
   if (!final.some(s => s.isBriefing) && final.length) {
     final[0] = { ...final[0], isBriefing: true, kicker: final[0].kicker || "TODAY'S TOP STORY", body: final[0].body || final[0].quickHit, takeaway: final[0].takeaway || null };
   }
 
-  return final.slice(0, MAX_STORIES); // hard ceiling, regardless of how much validated
+  return final.slice(0, MAX_STORIES);
+}
+
+// Closer safety net: reject anything somber, fall back to the curated list.
+// Two checks: (1) somber keywords in the closer's own text/attribution,
+// (2) a name in the attribution overlapping with today's other stories -
+// this catches cases like a grieving relative being quoted with no somber
+// words at all, just because they're the same person from an earlier story.
+function resolveCloser(aiCloser, dayOfYear, storiesText) {
+  const fallback = FALLBACK_QUOTES[dayOfYear % FALLBACK_QUOTES.length];
+  if (!aiCloser || !aiCloser.text) return { type: "quote", ...fallback };
+
+  const checkText = `${aiCloser.text} ${aiCloser.attribution || ""} ${aiCloser.headline || ""}`;
+  if (SOMBER_KEYWORDS.test(checkText)) {
+    console.warn(`Closer rejected by keyword filter ("${aiCloser.text.slice(0, 60)}...") - using fallback quote`);
+    return { type: "quote", ...fallback };
+  }
+
+  if (aiCloser.attribution) {
+    const properNouns = aiCloser.attribution.match(/\b[A-Z][a-z]{3,}\b/g) || [];
+    const overlap = properNouns.some(name => storiesText.includes(name));
+    if (overlap) {
+      console.warn(`Closer rejected - attribution "${aiCloser.attribution}" shares a name with today's other stories - using fallback quote`);
+      return { type: "quote", ...fallback };
+    }
+  }
+  return aiCloser;
+}
+
+// Legacy now goes through the same real-source validation as every story.
+async function resolveLegacy(aiLegacy) {
+  if (!aiLegacy || !aiLegacy.url || !aiLegacy.text) return null;
+  if (!(await urlIsAlive(aiLegacy.url))) {
+    console.warn("Dropped AI-picked Legacy item - source link failed");
+    return null;
+  }
+  return aiLegacy;
 }
 
 async function resolveGreenBook(aiGreenBook) {
@@ -763,8 +812,8 @@ async function main() {
   const { iso, label, dayOfYear } = todayParts(0);
 
   const pressLeads = await fetchPressLeads();
-  const [content, moneyMoves, sports, legacy, theNumber] = await Promise.all([
-    curateContent(pressLeads), fetchMoneyMoves(), fetchSportsBox(), fetchThisDayInLegacy(), fetchTheNumber(dayOfYear)
+  const [content, moneyMoves, sports, theNumber] = await Promise.all([
+    curateContent(pressLeads), fetchMoneyMoves(), fetchSportsBox(), fetchTheNumber(dayOfYear)
   ]);
 
   const validPrimaries = await validateStories(content.stories);
@@ -772,6 +821,8 @@ async function main() {
   const stories = assembleStories(validPrimaries, validBackups);
   if (stories.length === 0) throw new Error("No stories passed validation today - not publishing.");
 
+  const closer = resolveCloser(content.closer, dayOfYear, stories.map(s => `${s.headline} ${s.body || s.quickHit || ""}`).join(" "));
+  const legacy = await resolveLegacy(content.legacy);
   const greenBook = await resolveGreenBook(content.greenBook);
 
   const manifestPath = path.join("issues", "manifest.json");
@@ -783,7 +834,7 @@ async function main() {
   const issueUrl = `${SITE_URL}/${issueFile}`;
 
   await mkdir("issues", { recursive: true });
-  const html = todayEditionHtml({ dateLabel: label, volume, stories, closer: content.closer, moneyMoves, sports, legacy, theNumber, greenBook, issueUrl });
+  const html = todayEditionHtml({ dateLabel: label, volume, stories, closer, moneyMoves, sports, legacy, theNumber, greenBook, issueUrl });
   await writeFile(issueFile, html);
   await writeFile("today.html", html);
   await writeFile("index.html", landingHtml({ dateLabel: label, volume, stories, issueUrl }));
@@ -793,10 +844,10 @@ async function main() {
   await writeFile(manifestPath, JSON.stringify(manifest, null, 2));
   await writeFile("archive.html", archiveHtml(manifest));
 
-  await sendBrevoCampaign({ dateLabel: label, issueUrl, stories, closer: content.closer });
+  await sendBrevoCampaign({ dateLabel: label, issueUrl, stories, closer });
 
   const briefingCount = stories.filter(s => s.isBriefing).length;
-  console.log(`Published ${issueFile} with ${stories.length} stories (target ${MIN_STORIES}-${MAX_STORIES}), ${briefingCount} briefings, + closer + Green Book. ${pressLeads.length} press leads fetched.`);
+  console.log(`Published ${issueFile} with ${stories.length} stories, ${briefingCount} briefings, closer (${closer.type}), legacy: ${legacy ? "yes" : "no"}, Green Book, ${pressLeads.length} press leads.`);
 }
 
 export { todayEditionHtml, landingHtml, archiveHtml };
