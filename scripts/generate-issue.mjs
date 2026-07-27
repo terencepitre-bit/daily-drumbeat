@@ -814,6 +814,23 @@ function archiveHtml(manifest) {
 // =========================================================
 // EMAIL
 // =========================================================
+// Target send time: 7:00 AM Eastern, every day. The workflow generates the
+// issue earlier (whenever GitHub actually runs the cron), and the campaign is
+// scheduled in Brevo for exactly this time. If generation finishes AFTER the
+// target (GitHub delay), we fall back to sending immediately.
+const SEND_HOUR_ET = 7;
+
+function brevoScheduledAtET(hour) {
+  const now = new Date();
+  // Offset between UTC and America/New_York right now (handles DST).
+  const etWall = new Date(now.toLocaleString("en-US", { timeZone: "America/New_York" }));
+  const offsetMs = now.getTime() - etWall.getTime();
+  const etDateStr = now.toLocaleDateString("en-CA", { timeZone: "America/New_York" }); // YYYY-MM-DD
+  const target = new Date(new Date(`${etDateStr}T${String(hour).padStart(2, "0")}:00:00Z`).getTime() + offsetMs);
+  // Needs to be comfortably in the future for Brevo to accept it.
+  return target.getTime() - now.getTime() > 2 * 60000 ? target : null;
+}
+
 async function sendBrevoCampaign({ dateLabel, issueUrl, stories, closer }) {
   if (!BREVO_API_KEY || !BREVO_LIST_ID || !BREVO_SENDER_EMAIL) { console.warn("Brevo env vars missing - skipping email send."); return; }
   const briefings = stories.filter(s => s.isBriefing);
@@ -835,14 +852,21 @@ async function sendBrevoCampaign({ dateLabel, issueUrl, stories, closer }) {
     <p><a href="${issueUrl}" style="background:#8E2A2B; color:#fff; padding:12px 24px; text-decoration:none;">Read online</a></p>
     <p style="font-size:12px; color:#6E6A60;">The Daily Drumbeat &middot; ${SITE_URL}</p>
   </div>`;
+  const scheduledAt = brevoScheduledAtET(SEND_HOUR_ET);
+  const campaign = { name: `Drumbeat ${dateLabel}`, subject: `The Daily Drumbeat — ${dateLabel}`, sender: { name: BREVO_SENDER_NAME, email: BREVO_SENDER_EMAIL }, type: "classic", htmlContent, recipients: { listIds: [Number(BREVO_LIST_ID)] } };
+  if (scheduledAt) campaign.scheduledAt = scheduledAt.toISOString();
   const createRes = await fetch("https://api.brevo.com/v3/emailCampaigns", {
     method: "POST", headers: { "content-type": "application/json", "api-key": BREVO_API_KEY },
-    body: JSON.stringify({ name: `Drumbeat ${dateLabel}`, subject: `The Daily Drumbeat — ${dateLabel}`, sender: { name: BREVO_SENDER_NAME, email: BREVO_SENDER_EMAIL }, type: "classic", htmlContent, recipients: { listIds: [Number(BREVO_LIST_ID)] } })
+    body: JSON.stringify(campaign)
   });
   if (!createRes.ok) { console.error("Brevo campaign create failed:", await createRes.text()); return; }
   const { id } = await createRes.json();
-  const sendRes = await fetch(`https://api.brevo.com/v3/emailCampaigns/${id}/sendNow`, { method: "POST", headers: { "api-key": BREVO_API_KEY } });
-  if (!sendRes.ok) console.error("Brevo send failed:", await sendRes.text()); else console.log("Brevo campaign sent.");
+  if (scheduledAt) {
+    console.log(`Brevo campaign scheduled for ${scheduledAt.toISOString()} (7:00 AM ET).`);
+  } else {
+    const sendRes = await fetch(`https://api.brevo.com/v3/emailCampaigns/${id}/sendNow`, { method: "POST", headers: { "api-key": BREVO_API_KEY } });
+    if (!sendRes.ok) console.error("Brevo send failed:", await sendRes.text()); else console.log("Brevo campaign sent immediately (generation ran past 7:00 AM ET).");
+  }
 }
 
 // =========================================================
