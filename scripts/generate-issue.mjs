@@ -112,11 +112,18 @@ async function fetchRssHeadlines(url, sourceName, limit = 4) {
     if (!res.ok) throw new Error(`${res.status}`);
     const xml = await res.text();
     const items = [...xml.matchAll(/<item>([\s\S]*?)<\/item>/g)].slice(0, limit);
+    const MAX_LEAD_AGE_HOURS = 72; // drop tip-sheet items older than 3 days
     return items.map(([, block]) => {
       const titleMatch = block.match(/<title>(?:<!\[CDATA\[)?(.*?)(?:\]\]>)?<\/title>/s);
       const linkMatch = block.match(/<link>(.*?)<\/link>/s);
-      return { title: (titleMatch?.[1] || "").trim(), url: (linkMatch?.[1] || "").trim(), source: sourceName };
-    }).filter(h => h.title && h.url);
+      const dateMatch = block.match(/<pubDate>(.*?)<\/pubDate>/s);
+      let ageHours = null;
+      if (dateMatch) {
+        const t = Date.parse(dateMatch[1].trim());
+        if (!Number.isNaN(t)) ageHours = Math.round((Date.now() - t) / 3600000);
+      }
+      return { title: (titleMatch?.[1] || "").trim(), url: (linkMatch?.[1] || "").trim(), source: sourceName, ageHours };
+    }).filter(h => h.title && h.url && (h.ageHours == null || h.ageHours <= MAX_LEAD_AGE_HOURS));
   } catch (err) {
     console.warn(`[data] RSS ${sourceName} failed: ${err.message}`);
     return [];
@@ -302,12 +309,36 @@ async function fetchManualGreenBook() {
   }
 }
 
+async function loadRecentCoverage(daysBack = 3) {
+  // Pull headlines from the last few published issues (via issues/manifest.json)
+  // so the curator can avoid repeating them.
+  try {
+    const raw = await readFile("issues/manifest.json", "utf-8");
+    const manifest = JSON.parse(raw);
+    const today = new Date().toISOString().slice(0, 10);
+    const seen = new Set();
+    const recent = [];
+    for (const entry of manifest) {
+      if (!entry?.date || entry.date >= today || seen.has(entry.date)) continue;
+      seen.add(entry.date);
+      if (entry.summary) recent.push({ date: entry.dateLabel || entry.date, summary: entry.summary });
+      if (recent.length >= daysBack) break;
+    }
+    return recent;
+  } catch {
+    return [];
+  }
+}
+
 // =========================================================
 // EVERYTHING BELOW CALLS CLAUDE
 // =========================================================
-function buildCurationPrompt(pressLeads) {
+function buildCurationPrompt(pressLeads, recentCoverage = []) {
+  const recentBlock = recentCoverage.length
+    ? `\nRECENTLY COVERED — headlines from the most recent editions (do NOT repeat these\nwithout a significant new development; see FRESHNESS RULES below):\n${recentCoverage.map(r => `[${r.date}] ${r.summary}`).join("\n")}\n`
+    : "";
   const leadsBlock = pressLeads.length
-    ? `\nHere are real, freely-accessible headlines pulled just now from Black press RSS feeds - already confirmed real (not invented), no paywalls. Use these as strong leads where relevant; search further into any of them, or use your own web_search for anything else:\n${pressLeads.map(l => `- "${l.title}" — ${l.source} — ${l.url}`).join("\n")}\n`
+    ? `\nHere are real, freely-accessible headlines pulled just now from Black press RSS feeds - already confirmed real (not invented), no paywalls. Use these as strong leads where relevant; search further into any of them, or use your own web_search for anything else:\n${pressLeads.map(l => `- "${l.title}" — ${l.source}${l.ageHours != null ? ` — published ~${l.ageHours}h ago` : ""} — ${l.url}`).join("\n")}\n`
     : "";
 
   return `You are the morning content curator for ${SITE_NAME}, a free daily newsletter
@@ -315,8 +346,17 @@ covering news that materially affects Black America.
 
 Use the web_search tool. Never invent a URL — only cite URLs that actually appeared in your
 own web_search results or in the press leads list below this run.
-${leadsBlock}
+${leadsBlock}${recentBlock}
 PART 1 — Curate between ${MIN_STORIES} and ${MAX_STORIES} stories total, made up of two kinds:
+
+FRESHNESS RULES (strict):
+- Strongly prefer stories that broke or developed within the last 24-48 hours. Treat the
+  "published ~Xh ago" annotations on the press leads as authoritative age signals.
+- NEVER re-run a story listed under RECENTLY COVERED unless there is a significant NEW
+  development since it last ran — and if so, the headline and body MUST lead with what is
+  new (a ruling, a response, new numbers, an outcome), not restate the original news.
+- The lead briefing (the first story) must never be a repeat of any prior day's lead.
+- If a press lead duplicates something under RECENTLY COVERED with nothing new, skip it.
 
 BRIEFINGS (${MIN_BRIEFINGS}-${MAX_BRIEFINGS} of them): the day's most significant stories.
 Mark each with "isBriefing": true. Each briefing gets:
@@ -394,9 +434,9 @@ Rules:
 - Headlines under 12 words. Quick hit sentences: 30 words maximum.`;
 }
 
-async function curateContent(pressLeads) {
+async function curateContent(pressLeads, recentCoverage = []) {
   const { label } = todayParts(0);
-  const prompt = buildCurationPrompt(pressLeads);
+  const prompt = buildCurationPrompt(pressLeads, recentCoverage);
   const res = await fetch("https://api.anthropic.com/v1/messages", {
     method: "POST",
     headers: { "content-type": "application/json", "x-api-key": ANTHROPIC_API_KEY, "anthropic-version": "2023-06-01" },
@@ -812,8 +852,9 @@ async function main() {
   const { iso, label, dayOfYear } = todayParts(0);
 
   const pressLeads = await fetchPressLeads();
+  const recentCoverage = await loadRecentCoverage(3);
   const [content, moneyMoves, sports, theNumber] = await Promise.all([
-    curateContent(pressLeads), fetchMoneyMoves(), fetchSportsBox(), fetchTheNumber(dayOfYear)
+    curateContent(pressLeads, recentCoverage), fetchMoneyMoves(), fetchSportsBox(), fetchTheNumber(dayOfYear)
   ]);
 
   const validPrimaries = await validateStories(content.stories);
