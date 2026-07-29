@@ -594,9 +594,18 @@ function footer() {
   </div>`;
 }
 
+function escAttr(str) {
+  return String(str)
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
+}
+
 function briefingBlock(s, issueUrl) {
   const sources = s.sources.map(src => `<a href="${src.url}" target="_blank" rel="noopener" class="pill">[${src.name}]</a>`).join(" ");
-  const shareText = `${s.headline} — via thedailydrumbeat.com ${issueUrl}`.replace(/'/g, "&#39;");
+  const shareText = `${s.headline} — via thedailydrumbeat.com ${issueUrl}`;
   return `<div class="story anchor-story">
     <div class="tag">[ ${s.section} &middot; ${sectionLabel(s.section).toUpperCase()} &middot; BRIEFING ]</div>
     <h2>${s.headline}</h2>
@@ -604,19 +613,19 @@ function briefingBlock(s, issueUrl) {
     ${s.takeaway ? `<div class="takeaway"><div class="takeaway-label">The takeaway</div>${s.takeaway}</div>` : ""}
     <div class="story-footer">
       <div class="sources"><span class="label">Sources</span> ${sources}</div>
-      <button class="copy-link" onclick="navigator.clipboard.writeText('${shareText}'); this.textContent='Copied';">Copy Link</button>
+      <button class="copy-link" data-copy="${escAttr(shareText)}">Copy Link</button>
     </div>
   </div>`;
 }
 function quickHitBlock(s, issueUrl) {
   const source = `<a href="${s.sources[0].url}" target="_blank" rel="noopener" class="pill">[${s.sources[0].name}]</a>`;
-  const shareText = `${s.headline} — via thedailydrumbeat.com ${issueUrl}`.replace(/'/g, "&#39;");
+  const shareText = `${s.headline} — via thedailydrumbeat.com ${issueUrl}`;
   return `<div class="quick-hit">
     <div class="tag">[ ${s.section} &middot; ${sectionLabel(s.section).toUpperCase()} ]</div>
     <p>${s.quickHit || s.body}</p>
     <div class="story-footer">
       <div class="sources">${source}</div>
-      <button class="copy-link" onclick="navigator.clipboard.writeText('${shareText}'); this.textContent='Copied';">Copy Link</button>
+      <button class="copy-link" data-copy="${escAttr(shareText)}">Copy Link</button>
     </div>
   </div>`;
 }
@@ -713,14 +722,14 @@ function greenBookBox(gb) {
 
 function closerBlock(closer, issueUrl) {
   if (!closer) return "";
-  const shareText = `via Drumbeat: ${closer.type === "quote" ? `"${closer.text}" — ${closer.attribution}` : closer.text} ${issueUrl}`.replace(/'/g, "&#39;");
+  const shareText = `via Drumbeat: ${closer.type === "quote" ? `"${closer.text}" — ${closer.attribution}` : closer.text} ${issueUrl}`;
   const body = closer.type === "quote"
     ? `<div class="serif" style="font-style:italic; font-size:22px;">&ldquo;${closer.text}&rdquo;</div><div style="font-size:14px; color:var(--muted); margin-top:8px;">&mdash; ${closer.attribution}</div>`
     : `<h3 style="margin:0;">${closer.headline}</h3><p style="margin-top:8px;">${closer.text}</p>`;
   return `<div class="box" style="text-align:center;">
     <div class="tag" style="margin-bottom:10px;">[ THE CLOSER &middot; P7 &middot; CULTURE & COMMUNITY ]</div>
     ${body}
-    <button class="copy-link" style="margin-top:14px;" onclick="navigator.clipboard.writeText('${shareText}'); this.textContent='Copied';">Share the Daily Drumbeat</button>
+    <button class="copy-link" style="margin-top:14px;" data-copy="${escAttr(shareText)}">Share the Daily Drumbeat</button>
   </div>`;
 }
 
@@ -753,6 +762,34 @@ function todayEditionHtml({ dateLabel, volume, stories, closer, moneyMoves, spor
     <div style="margin-top:18px;">${closerBlock(closer, issueUrl)}</div>
   </div>
   ${footer()}
+  <script>
+  document.addEventListener("click", function (e) {
+    var btn = e.target.closest(".copy-link");
+    if (!btn) return;
+    var text = btn.getAttribute("data-copy");
+    if (!text) return;
+    var original = btn.textContent;
+    function done() {
+      btn.textContent = "Copied";
+      setTimeout(function () { btn.textContent = original; }, 2000);
+    }
+    function fallback() {
+      var ta = document.createElement("textarea");
+      ta.value = text;
+      ta.style.position = "fixed";
+      ta.style.opacity = "0";
+      document.body.appendChild(ta);
+      ta.select();
+      try { document.execCommand("copy"); done(); } catch (err) {}
+      document.body.removeChild(ta);
+    }
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(text).then(done).catch(fallback);
+    } else {
+      fallback();
+    }
+  });
+  </script>
 </body></html>`;
 }
 
