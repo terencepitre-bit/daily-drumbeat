@@ -2,11 +2,14 @@ name: Daily Drumbeat Issue
 
 on:
   schedule:
-    # 10:17 UTC = 6:17am ET during daylight time (roughly Mar-Nov),
-    # and 5:17am ET during standard time (roughly Nov-Mar).
+    # 8:17 UTC = 4:17am ET during daylight time (roughly Mar-Nov),
+    # and 3:17am ET during standard time (roughly Nov-Mar).
+    # GitHub cron cannot follow daylight saving, so winter runs are an
+    # hour earlier — harmless, since the email itself is scheduled in
+    # Brevo for exactly 6:00 AM ET year-round by the generator script.
     # Runs 7 days a week. The :17 offset avoids GitHub's worst
     # top-of-the-hour scheduling delays.
-    - cron: "17 10 * * *"
+    - cron: "17 8 * * *"
   workflow_dispatch: {} # lets you click "Run workflow" manually to test
 
 permissions:
