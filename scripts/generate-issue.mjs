@@ -321,13 +321,67 @@ async function loadRecentCoverage(daysBack = 3) {
     for (const entry of manifest) {
       if (!entry?.date || entry.date >= today || seen.has(entry.date)) continue;
       seen.add(entry.date);
-      if (entry.summary) recent.push({ date: entry.dateLabel || entry.date, summary: entry.summary });
+      if (entry.summary || entry.headlines) recent.push({ date: entry.dateLabel || entry.date, summary: entry.summary || (entry.headlines || []).join(", "), headlines: entry.headlines || [], slugs: entry.slugs || [] });
       if (recent.length >= daysBack) break;
     }
     return recent;
   } catch {
     return [];
   }
+}
+
+// =========================================================
+// DUPLICATE DETECTION
+// Wire-syndicated stories run across multiple outlets with different
+// headlines and URLs. Two signals catch them: (1) identical URL slugs
+// (syndicated copies often keep the same slug), (2) content-word overlap
+// between headline+text.
+// =========================================================
+const STOPWORDS = new Set("a an and are as at be by for from has have had he her his in is it its of on or she that the their they this to was were will with after amid over under new say says said".split(" "));
+
+function contentTokens(text) {
+  return new Set(String(text).toLowerCase().normalize("NFKD")
+    .replace(/[^a-z0-9\s]/g, " ").split(/\s+/)
+    .filter(w => w.length > 2 && !STOPWORDS.has(w)));
+}
+
+function textOverlap(a, b) {
+  const A = contentTokens(a), B = contentTokens(b);
+  if (!A.size || !B.size) return 0;
+  let shared = 0;
+  for (const t of A) if (B.has(t)) shared++;
+  return shared / Math.min(A.size, B.size);
+}
+
+function urlSlug(url) {
+  try {
+    const path = new URL(url).pathname.replace(/\/+$/, "");
+    const seg = path.split("/").filter(Boolean).pop() || "";
+    return seg.replace(/\.[a-z]{2,5}$/i, "").toLowerCase();
+  } catch { return ""; }
+}
+
+function storyText(s) { return `${s.headline || ""} ${s.quickHit || s.body || ""}`; }
+function storySlugs(s) { return (s.sources || []).map(src => urlSlug(src.url)).filter(sl => sl.length >= 8); }
+
+const DUP_THRESHOLD = 0.55;
+
+function dedupeStories(candidates, keptTexts, keptSlugs, label) {
+  const kept = [];
+  for (const s of candidates) {
+    const text = storyText(s);
+    const slugs = storySlugs(s);
+    const slugDup = slugs.find(sl => keptSlugs.has(sl));
+    const textDup = keptTexts.some(t => textOverlap(text, t) >= DUP_THRESHOLD);
+    if (slugDup || textDup) {
+      console.log(`Dropped duplicate ${label}: "${s.headline}"${slugDup ? ` (slug match: ${slugDup})` : " (text overlap)"}`);
+      continue;
+    }
+    kept.push(s);
+    keptTexts.push(text);
+    for (const sl of slugs) keptSlugs.add(sl);
+  }
+  return kept;
 }
 
 // =========================================================
@@ -355,6 +409,14 @@ FRESHNESS RULES (strict):
 - NEVER re-run a story listed under RECENTLY COVERED unless there is a significant NEW
   development since it last ran — and if so, the headline and body MUST lead with what is
   new (a ruling, a response, new numbers, an outcome), not restate the original news.
+- SYNDICATION WARNING: the same underlying story frequently runs across multiple Black
+  press outlets (NNPA newswire syndication) with DIFFERENT headlines and DIFFERENT URLs.
+  Judge duplication by the underlying event — the same people, the same action, the same
+  facts — never by whether the headline wording or the source outlet differs. A story you
+  covered yesterday via one outlet is still a repeat today via a different outlet.
+- The same underlying story must never appear TWICE within today's edition — not as both
+  a briefing and a quick hit, not as two quick hits from different outlets, and not as
+  both a story and a Green Book item.
 - The lead briefing (the first story) must never be a repeat of any prior day's lead.
 - If a press lead duplicates something under RECENTLY COVERED with nothing new, skip it.
 
@@ -400,8 +462,16 @@ spotlighting, and ONE real, currently-open opportunity (scholarship, grant, fell
 program) for Black students/entrepreneurs. Both must come from an actual web_search result
 with a real URL. Return null for either if you can't find a genuinely real, verifiable one.
 
+PART 6 — Greeting: write a warm, conversational 2-3 sentence morning greeting that opens
+the edition. It MUST begin with "Good morning, Drummers" (readers of The Daily Drumbeat
+are "Drummers"), mention the day of the week, and tease 2-3 of today's most interesting
+stories in a natural, engaging voice — like a friend catching you up over coffee. No
+emoji, no hashtags, no exclamation-point pileups. If today's lead stories are heavy,
+keep the tone respectful, not chipper.
+
 Output ONLY valid JSON, no markdown fences, no commentary, exactly this shape:
 {
+  "greeting": "Good morning, Drummers — it's Thursday, and ...",
   "stories": [
     { "section": "P2", "isBriefing": true, "headline": "...", "kicker": "GOVERNMENT WATCH",
       "body": "50-70 words...", "takeaway": "one sharp sentence",
@@ -575,21 +645,21 @@ function pageHead(title, ogPath = "") {
 <meta name="twitter:title" content="${SITE_NAME}">
 <meta name="twitter:description" content="News about us. For us. By the beat of the drum.">
 <meta name="twitter:image" content="${SITE_URL}/assets/og-image.png">
-<link rel="stylesheet" href="assets/drumbeat.css"></head>
+<link rel="stylesheet" href="/assets/drumbeat.css"></head>
 <body>`;
 }
 function header(active) {
   const items = [["index.html", "Landing"], ["today.html", "Today's Edition"], ["archive.html", "Archive"], ["manifesto.html", "About"], ["advertise.html", "Advertise"]];
   return `<div class="site-header">
-    <a href="index.html" class="logo">THE DAILY <span class="D">D</span>RUMBEAT</a>
-    <div class="nav">${items.map(([href, label]) => `<a href="${href}"${href === active ? ' class="active"' : ""}>${label}</a>`).join("")}</div>
+    <a href="/index.html" class="logo">THE DAILY <span class="D">D</span>RUMBEAT</a>
+    <div class="nav">${items.map(([href, label]) => `<a href="/${href}"${href === active ? ' class="active"' : ""}>${label}</a>`).join("")}</div>
   </div>`;
 }
 function footer() {
   return `<div class="site-footer">
     <div class="logo2">THE DAILY <span class="D">D</span>RUMBEAT</div>
     <div class="fine">News about us. For us. By the beat of the drum.<br>
-      <a href="corrections.html">Corrections: corrections@thedailydrumbeat.com</a>
+      <a href="/corrections.html">Corrections: corrections@thedailydrumbeat.com</a>
       &nbsp;|&nbsp; All sources free to access &nbsp;|&nbsp; A Pitre Media publication</div>
   </div>`;
 }
@@ -650,7 +720,7 @@ function moneyMovesBox(m) {
     </div>
     <table>${rows.map(([a, v, s]) => `<tr><td class="asset">${a}</td><td>${v}</td><td class="source-note">${s}</td></tr>`).join("")}</table>
     ${m.tickers.length ? `<div style="margin-top:14px; font-size:11px; letter-spacing:1px; text-transform:uppercase; color:var(--muted);">Black Wall Street Watch</div><table style="margin-top:6px;">${tickerRows}</table>` : ""}
-    <div class="sponsor-note">As of ${m.asOf} &middot; Finnhub, FRED, CoinGecko (all free) &middot; <a href="advertise.html">Sponsor this box</a></div>
+    <div class="sponsor-note">As of ${m.asOf} &middot; Finnhub, FRED, CoinGecko (all free) &middot; <a href="/advertise.html">Sponsor this box</a></div>
   </div>`;
 }
 
@@ -715,9 +785,9 @@ function greenBookBox(gb) {
       <p style="font-size:14px; line-height:1.6;">${gb.opportunity.description || ""}</p>
       <a href="${gb.opportunity.url}" style="font-size:12px; font-weight:700; letter-spacing:1px; text-transform:uppercase; text-decoration:underline;">${gb.opportunity.cta || "Apply"} &rarr;</a>
     </div>` : ""}
-    <div class="sponsor-note">Want your business featured here? <a href="advertise.html">Advertise</a></div>
+    <div class="sponsor-note">Want your business featured here? <a href="/advertise.html">Advertise</a></div>
   </div>
-  <div class="box" style="text-align:center; border-style:dashed; color:var(--muted); font-size:12px; letter-spacing:1px; text-transform:uppercase;">Ad Slot — Money Moves Sponsor &middot; 300x100 &middot; <a href="advertise.html" style="color:var(--red);">Available</a></div>`;
+  <div class="box" style="text-align:center; border-style:dashed; color:var(--muted); font-size:12px; letter-spacing:1px; text-transform:uppercase;">Ad Slot — Money Moves Sponsor &middot; 300x100 &middot; <a href="/advertise.html" style="color:var(--red);">Available</a></div>`;
 }
 
 function closerBlock(closer, issueUrl) {
@@ -733,7 +803,7 @@ function closerBlock(closer, issueUrl) {
   </div>`;
 }
 
-function todayEditionHtml({ dateLabel, volume, stories, closer, moneyMoves, sports, legacy, theNumber, greenBook, issueUrl }) {
+function todayEditionHtml({ dateLabel, volume, greeting, stories, closer, moneyMoves, sports, legacy, theNumber, greenBook, issueUrl }) {
   const briefings = stories.filter(s => s.isBriefing);
   const quickHits = stories.filter(s => !s.isBriefing);
   return `${pageHead(dateLabel, "today.html")}
@@ -742,6 +812,7 @@ function todayEditionHtml({ dateLabel, volume, stories, closer, moneyMoves, spor
     <div class="hero" style="padding-top:0;">
       <div class="maintitle" style="font-size:40px;">THE DAILY <span class="D">D</span>RUMBEAT</div>
       <div class="hero .volbar" style="max-width:760px; margin:20px auto 0; border-top:1px solid var(--ink); border-bottom:1px solid var(--ink); padding:10px 0; font-size:13px; letter-spacing:2px; text-transform:uppercase; color:var(--muted);">TODAY'S EDITION &mdash; ${volume} &mdash; ${dateLabel}</div>
+      ${greeting ? `<div style="max-width:700px; margin:26px auto 0; font-family:Georgia,'Times New Roman',serif; font-size:18px; line-height:1.75; color:var(--ink); text-align:left;">${greeting}</div>` : ""}
     </div>
 
     <div class="two-col" style="margin-top:40px;">
@@ -810,14 +881,14 @@ function landingHtml({ dateLabel, volume, stories, issueUrl }) {
     <div class="tagline">News about us. For us. By the beat of the drum.</div>
     <div class="volbar">${volume} &mdash; ${dateLabel}</div>
     <div class="summary">In today&rsquo;s Drumbeat: ${summary}.</div>
-    <a href="today.html" class="btn-primary">Read Today's Edition &rarr;</a>
+    <a href="/today.html" class="btn-primary">Read Today's Edition &rarr;</a>
   </div>
 
   <div class="inside-today wrap">
     <h3>Inside Today</h3>
     <div class="sub">All sections</div>
     <div class="section-grid">
-      ${sectionCards.map(([code, name, preview]) => `<a href="today.html"><div class="stag">[ ${code} &middot; ${name.toUpperCase()} ]</div><div class="stitle">${preview}</div></a>`).join("\n      ")}
+      ${sectionCards.map(([code, name, preview]) => `<a href="/today.html"><div class="stag">[ ${code} &middot; ${name.toUpperCase()} ]</div><div class="stitle">${preview}</div></a>`).join("\n      ")}
     </div>
   </div>
 
@@ -833,7 +904,7 @@ function landingHtml({ dateLabel, volume, stories, issueUrl }) {
 }
 
 function archiveHtml(manifest) {
-  const rows = manifest.map(e => `<a href="${e.file}" class="archive-row">
+  const rows = manifest.map(e => `<a href="/${e.file}" class="archive-row">
       <span class="d">${e.dateLabel}</span><span class="v">${e.volume}</span><span class="c">${e.storyCount} stories &rarr;</span>
       <div class="s">${e.summary}</div>
     </a>`).join("\n    ");
@@ -851,11 +922,11 @@ function archiveHtml(manifest) {
 // =========================================================
 // EMAIL
 // =========================================================
-// Target send time: 7:00 AM Eastern, every day. The workflow generates the
+// Target send time: 6:00 AM Eastern, every day. The workflow generates the
 // issue earlier (whenever GitHub actually runs the cron), and the campaign is
 // scheduled in Brevo for exactly this time. If generation finishes AFTER the
 // target (GitHub delay), we fall back to sending immediately.
-const SEND_HOUR_ET = 7;
+const SEND_HOUR_ET = 6;
 
 function brevoScheduledAtET(hour) {
   const now = new Date();
@@ -868,12 +939,13 @@ function brevoScheduledAtET(hour) {
   return target.getTime() - now.getTime() > 2 * 60000 ? target : null;
 }
 
-async function sendBrevoCampaign({ dateLabel, issueUrl, stories, closer }) {
+async function sendBrevoCampaign({ dateLabel, issueUrl, greeting, stories, closer }) {
   if (!BREVO_API_KEY || !BREVO_LIST_ID || !BREVO_SENDER_EMAIL) { console.warn("Brevo env vars missing - skipping email send."); return; }
   const briefings = stories.filter(s => s.isBriefing);
   const quickHits = stories.filter(s => !s.isBriefing);
   const htmlContent = `<div style="font-family:Georgia,serif; max-width:600px; margin:0 auto;">
     <h1 style="color:#8E2A2B;">The Daily Drumbeat — ${dateLabel}</h1>
+    ${greeting ? `<p style="font-family:Georgia,serif; font-size:16px; line-height:1.7; color:#1E1C18;">${greeting}</p>` : ""}
     ${briefings.map(anchor => `<div style="margin-bottom:24px;">
       <div style="font-size:12px; color:#8E2A2B; text-transform:uppercase; letter-spacing:1px;">${sectionLabel(anchor.section)} &middot; Briefing</div>
       <h2 style="font-family:Georgia,serif; margin:6px 0;">${anchor.headline}</h2>
@@ -899,10 +971,10 @@ async function sendBrevoCampaign({ dateLabel, issueUrl, stories, closer }) {
   if (!createRes.ok) { console.error("Brevo campaign create failed:", await createRes.text()); return; }
   const { id } = await createRes.json();
   if (scheduledAt) {
-    console.log(`Brevo campaign scheduled for ${scheduledAt.toISOString()} (7:00 AM ET).`);
+    console.log(`Brevo campaign scheduled for ${scheduledAt.toISOString()} (${SEND_HOUR_ET}:00 AM ET).`);
   } else {
     const sendRes = await fetch(`https://api.brevo.com/v3/emailCampaigns/${id}/sendNow`, { method: "POST", headers: { "api-key": BREVO_API_KEY } });
-    if (!sendRes.ok) console.error("Brevo send failed:", await sendRes.text()); else console.log("Brevo campaign sent immediately (generation ran past 7:00 AM ET).");
+    if (!sendRes.ok) console.error("Brevo send failed:", await sendRes.text()); else console.log(`Brevo campaign sent immediately (generation ran past ${SEND_HOUR_ET}:00 AM ET).`);
   }
 }
 
@@ -920,12 +992,37 @@ async function main() {
 
   const validPrimaries = await validateStories(content.stories);
   const validBackups = await validateStories(content.backups);
-  const stories = assembleStories(validPrimaries, validBackups);
+
+  // Programmatic duplicate backstop: drop anything matching the last 3 days'
+  // coverage (by URL slug or content-word overlap) or repeating within today.
+  const keptTexts = recentCoverage.flatMap(r => r.headlines || []);
+  const keptSlugs = new Set(recentCoverage.flatMap(r => r.slugs || []));
+  const dedupedPrimaries = dedupeStories(validPrimaries, keptTexts, keptSlugs, "primary");
+  const dedupedBackups = dedupeStories(validBackups, keptTexts, keptSlugs, "backup");
+  const stories = assembleStories(dedupedPrimaries, dedupedBackups);
   if (stories.length === 0) throw new Error("No stories passed validation today - not publishing.");
 
   const closer = resolveCloser(content.closer, dayOfYear, stories.map(s => `${s.headline} ${s.body || s.quickHit || ""}`).join(" "));
   const legacy = await resolveLegacy(content.legacy);
   const greenBook = await resolveGreenBook(content.greenBook);
+
+  // Drop quick hits that duplicate a Green Book item (e.g. the same scholarship
+  // running as both a quick hit and the Green Book opportunity).
+  const gbTexts = [greenBook.business, greenBook.opportunity].filter(Boolean)
+    .map(g => `${g.name || g.title || ""} ${g.description || ""}`);
+  const gbSlugs = new Set([greenBook.business?.url, greenBook.opportunity?.url]
+    .filter(Boolean).map(urlSlug).filter(sl => sl.length >= 8));
+  const finalStories = stories.filter(s => {
+    if (s.isBriefing) return true;
+    const dupSlug = storySlugs(s).some(sl => gbSlugs.has(sl));
+    const dupText = gbTexts.some(t => textOverlap(storyText(s), t) >= DUP_THRESHOLD);
+    if (dupSlug || dupText) { console.log(`Dropped quick hit duplicating Green Book: "${s.headline}"`); return false; }
+    return true;
+  });
+
+  const greeting = typeof content.greeting === "string" && content.greeting.trim()
+    ? content.greeting.trim()
+    : `Good morning, Drummers — here's what's moving today.`;
 
   const manifestPath = path.join("issues", "manifest.json");
   let manifest = [];
@@ -936,20 +1033,25 @@ async function main() {
   const issueUrl = `${SITE_URL}/${issueFile}`;
 
   await mkdir("issues", { recursive: true });
-  const html = todayEditionHtml({ dateLabel: label, volume, stories, closer, moneyMoves, sports, legacy, theNumber, greenBook, issueUrl });
+  const html = todayEditionHtml({ dateLabel: label, volume, greeting, stories: finalStories, closer, moneyMoves, sports, legacy, theNumber, greenBook, issueUrl });
   await writeFile(issueFile, html);
   await writeFile("today.html", html);
-  await writeFile("index.html", landingHtml({ dateLabel: label, volume, stories, issueUrl }));
+  await writeFile("index.html", landingHtml({ dateLabel: label, volume, stories: finalStories, issueUrl }));
 
-  manifest.unshift({ date: iso, dateLabel: label, volume, file: issueFile, storyCount: stories.length, summary: stories.map(s => s.headline).join(", ") });
+  manifest.unshift({
+    date: iso, dateLabel: label, volume, file: issueFile, storyCount: finalStories.length,
+    summary: finalStories.map(s => s.headline).join(", "),
+    headlines: finalStories.map(s => s.headline),
+    slugs: [...new Set(finalStories.flatMap(storySlugs))]
+  });
   manifest = manifest.slice(0, 90);
   await writeFile(manifestPath, JSON.stringify(manifest, null, 2));
   await writeFile("archive.html", archiveHtml(manifest));
 
-  await sendBrevoCampaign({ dateLabel: label, issueUrl, stories, closer });
+  await sendBrevoCampaign({ dateLabel: label, issueUrl, greeting, stories: finalStories, closer });
 
-  const briefingCount = stories.filter(s => s.isBriefing).length;
-  console.log(`Published ${issueFile} with ${stories.length} stories, ${briefingCount} briefings, closer (${closer.type}), legacy: ${legacy ? "yes" : "no"}, Green Book, ${pressLeads.length} press leads.`);
+  const briefingCount = finalStories.filter(s => s.isBriefing).length;
+  console.log(`Published ${issueFile} with ${finalStories.length} stories, ${briefingCount} briefings, closer (${closer.type}), legacy: ${legacy ? "yes" : "no"}, Green Book, ${pressLeads.length} press leads.`);
 }
 
 export { todayEditionHtml, landingHtml, archiveHtml };
