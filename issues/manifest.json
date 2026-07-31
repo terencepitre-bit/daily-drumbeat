@@ -1,5 +1,44 @@
 [
   {
+    "date": "2026-07-31",
+    "dateLabel": "FRIDAY, JULY 31, 2026",
+    "volume": "VOL 1 NO 18",
+    "file": "issues/2026-07-31.html",
+    "storyCount": 13,
+    "summary": "Missouri Man's Death in Police Custody Renews Accountability Demands, Data Center Boom Doubles Electricity Bills for Black Families, Kendrick Johnson's Parents File Supreme Court Petition Demanding Justice, Ida B. Wells Family Debunks Viral Claim About Nolan Wells Death, Black Film Production Studio Opens in Downtown Baltimore, Black Activists Launch Global Anti-Racism Platform in Colombia, Black Business Month Kicks Off as DEI Programs Face Threats, D.C. Intergenerational Program Launches New Community Hubs, Black-Owned Startups Face Venture Capital Drought Despite Growth, HBCU Scholarship Programs Fight to Survive DEI Rollback, Prison Fellowship Offers Hope to At-Risk Houston Youth, Immigration Enforcement Challenge Filed in D.C. Federal Court, Baltimore Farmers Market Season Celebrates Local Black Vendors",
+    "headlines": [
+      "Missouri Man's Death in Police Custody Renews Accountability Demands",
+      "Data Center Boom Doubles Electricity Bills for Black Families",
+      "Kendrick Johnson's Parents File Supreme Court Petition Demanding Justice",
+      "Ida B. Wells Family Debunks Viral Claim About Nolan Wells Death",
+      "Black Film Production Studio Opens in Downtown Baltimore",
+      "Black Activists Launch Global Anti-Racism Platform in Colombia",
+      "Black Business Month Kicks Off as DEI Programs Face Threats",
+      "D.C. Intergenerational Program Launches New Community Hubs",
+      "Black-Owned Startups Face Venture Capital Drought Despite Growth",
+      "HBCU Scholarship Programs Fight to Survive DEI Rollback",
+      "Prison Fellowship Offers Hope to At-Risk Houston Youth",
+      "Immigration Enforcement Challenge Filed in D.C. Federal Court",
+      "Baltimore Farmers Market Season Celebrates Local Black Vendors"
+    ],
+    "slugs": [
+      "lloyd-gilmore-police-custody-death",
+      "lloyd-gilmore-sikestown-missouri-police-brutality",
+      "trump-electricity-prices-black-families",
+      "kendrick-johnson-supreme-court-petition",
+      "nolan-wells-ida-b-wells-family",
+      "byrds-eye-view-studio-baltimore-opening",
+      "black-activists-form-global-anti-racism-network-in-colombia",
+      "august-national-black-business-month-2026",
+      "dc-seniors-health-disparity-initiative",
+      "black-employers-are-reaching-new-heights",
+      "scholarships-and-grants",
+      "prison-fellowship-offers-hope-to-houston-kids",
+      "aclu-files-immigration-misconduct-claims",
+      "kick-off-the-2026-farmers-market-week-in-reisterstown-on-august-2"
+    ]
+  },
+  {
     "date": "2026-07-30",
     "dateLabel": "THURSDAY, JULY 30, 2026",
     "volume": "VOL 1 NO 17",
