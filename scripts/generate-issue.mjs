@@ -112,7 +112,7 @@ async function fetchRssHeadlines(url, sourceName, limit = 4) {
     if (!res.ok) throw new Error(`${res.status}`);
     const xml = await res.text();
     const items = [...xml.matchAll(/<item>([\s\S]*?)<\/item>/g)].slice(0, limit);
-    const MAX_LEAD_AGE_HOURS = 72; // drop tip-sheet items older than 3 days
+    const MAX_LEAD_AGE_HOURS = 48; // drop tip-sheet items older than 2 days
     return items.map(([, block]) => {
       const titleMatch = block.match(/<title>(?:<!\[CDATA\[)?(.*?)(?:\]\]>)?<\/title>/s);
       const linkMatch = block.match(/<link>(.*?)<\/link>/s);
@@ -321,7 +321,14 @@ async function loadRecentCoverage(daysBack = 3) {
     for (const entry of manifest) {
       if (!entry?.date || entry.date >= today || seen.has(entry.date)) continue;
       seen.add(entry.date);
-      if (entry.summary || entry.headlines) recent.push({ date: entry.dateLabel || entry.date, summary: entry.summary || (entry.headlines || []).join(", "), headlines: entry.headlines || [], slugs: entry.slugs || [] });
+      if (entry.summary || entry.headlines) {
+        // Old entries (pre-dedup code) only have a joined summary string;
+        // split it into per-headline fragments so they still count.
+        const texts = entry.headlines?.length
+          ? entry.headlines
+          : String(entry.summary || "").split(/,\s+/).filter(f => f.length > 12);
+        recent.push({ date: entry.dateLabel || entry.date, summary: entry.summary || (entry.headlines || []).join(", "), texts, slugs: entry.slugs || [] });
+      }
       if (recent.length >= daysBack) break;
     }
     return recent;
@@ -382,6 +389,23 @@ function dedupeStories(candidates, keptTexts, keptSlugs, label) {
     for (const sl of slugs) keptSlugs.add(sl);
   }
   return kept;
+}
+
+// Remove press leads that duplicate recent coverage BEFORE the curator ever
+// sees them — the model can't re-pick a stale story that isn't in the tip sheet.
+function filterPressLeads(leads, recentTexts, recentSlugs) {
+  return leads.filter(l => {
+    const sl = urlSlug(l.url);
+    if (sl.length >= 8 && recentSlugs.has(sl)) {
+      console.log(`Dropped press lead (already-covered slug): "${l.title}"`);
+      return false;
+    }
+    if (recentTexts.some(t => textOverlap(l.title, t) >= DUP_THRESHOLD)) {
+      console.log(`Dropped press lead (already covered): "${l.title}"`);
+      return false;
+    }
+    return true;
+  });
 }
 
 // =========================================================
@@ -984,8 +1008,12 @@ async function sendBrevoCampaign({ dateLabel, issueUrl, greeting, stories, close
 async function main() {
   const { iso, label, dayOfYear } = todayParts(0);
 
-  const pressLeads = await fetchPressLeads();
+  const pressLeadsRaw = await fetchPressLeads();
   const recentCoverage = await loadRecentCoverage(3);
+  const recentTexts = recentCoverage.flatMap(r => r.texts || []);
+  const recentSlugs = new Set(recentCoverage.flatMap(r => r.slugs || []));
+  const pressLeads = filterPressLeads(pressLeadsRaw, recentTexts, recentSlugs);
+  console.log(`Press leads: ${pressLeads.length} of ${pressLeadsRaw.length} passed the already-covered filter.`);
   const [content, moneyMoves, sports, theNumber] = await Promise.all([
     curateContent(pressLeads, recentCoverage), fetchMoneyMoves(), fetchSportsBox(), fetchTheNumber(dayOfYear)
   ]);
@@ -995,8 +1023,8 @@ async function main() {
 
   // Programmatic duplicate backstop: drop anything matching the last 3 days'
   // coverage (by URL slug or content-word overlap) or repeating within today.
-  const keptTexts = recentCoverage.flatMap(r => r.headlines || []);
-  const keptSlugs = new Set(recentCoverage.flatMap(r => r.slugs || []));
+  const keptTexts = [...recentTexts];
+  const keptSlugs = new Set(recentSlugs);
   const dedupedPrimaries = dedupeStories(validPrimaries, keptTexts, keptSlugs, "primary");
   const dedupedBackups = dedupeStories(validBackups, keptTexts, keptSlugs, "backup");
   const stories = assembleStories(dedupedPrimaries, dedupedBackups);
