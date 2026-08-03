@@ -2,6 +2,41 @@
   {
     "date": "2026-08-03",
     "dateLabel": "MONDAY, AUGUST 3, 2026",
+    "volume": "VOL 1 NO 23",
+    "file": "issues/2026-08-03.html",
+    "storyCount": 11,
+    "summary": "Savannah State Baseball Star Released From ICE Detention, Swimming Disparities Put Black Kids at Greater Drowning Risk, HBCU Football Season Kicks Off August 29 With Signature Classics, Gen Z Ditches News Sites for Social Media, Study Finds, NYC Cellphone Ban Enters Second Year in Schools, NYC Teens Struggling to Find Safe Public Spaces, Deanwood Restaurant Closure Leaves Neighborhood Without Dining Hub, Reginald Gordon Transforms Prison Time Into Youth Outreach Mission, Houston Celebrates Black Pioneer Legacies in History Feature, Alpha Kappa Alpha Sorority Installs New North Atlantic Regional Leader, Book Review: Daily Life Along the Underground Railroad",
+    "headlines": [
+      "Savannah State Baseball Star Released From ICE Detention",
+      "Swimming Disparities Put Black Kids at Greater Drowning Risk",
+      "HBCU Football Season Kicks Off August 29 With Signature Classics",
+      "Gen Z Ditches News Sites for Social Media, Study Finds",
+      "NYC Cellphone Ban Enters Second Year in Schools",
+      "NYC Teens Struggling to Find Safe Public Spaces",
+      "Deanwood Restaurant Closure Leaves Neighborhood Without Dining Hub",
+      "Reginald Gordon Transforms Prison Time Into Youth Outreach Mission",
+      "Houston Celebrates Black Pioneer Legacies in History Feature",
+      "Alpha Kappa Alpha Sorority Installs New North Atlantic Regional Leader",
+      "Book Review: Daily Life Along the Underground Railroad"
+    ],
+    "slugs": [
+      "johan-sandoval-ice-detention-savannah-state",
+      "johan-sandoval-ice-detained-savannah-state-hbcu-baseball",
+      "why-learning-how-to-swim-matters",
+      "hbcu-go-releases-2026-football-schedule-13-games-classics-homecomings-full-slate-how-to-watch",
+      "traditional-news-sources-being-replaced-with-socaial-media-platforms",
+      "new-yorks-school-cellphone-policy-enters-its-second-year",
+      "nyc-teens-say-theres-a-lack-of-safe-spaces",
+      "deanwood-smokehouse-strand-closure",
+      "reginald-gordon-prison-to-outreach",
+      "houston-black-pioneers-who-made-history",
+      "tonja-ringgold-installed-aka-director",
+      "daily-life-underground-railroad-book"
+    ]
+  },
+  {
+    "date": "2026-08-03",
+    "dateLabel": "MONDAY, AUGUST 3, 2026",
     "volume": "VOL 1 NO 22",
     "file": "issues/2026-08-03.html",
     "storyCount": 13,
