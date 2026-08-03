@@ -688,6 +688,23 @@ function footer() {
   </div>`;
 }
 
+// Brevo-hosted signup form (single source of truth — used by the landing page
+// subscribe box and the in-edition subscribe banners).
+const BREVO_SIGNUP_URL = "https://1a3e105b.sibforms.com/serve/MUIFAIJL5UKBuRKB0t2SMRcCN7dPVIDPS3wraCIqU8bOsCk_66TFY1aS5ovPumAlVJoBIkt2Zlz4Sm1ZQHNhm0siu2bk2mg_JfqsMDb_ZUUMDQ6FFiG9mkYwawb9VGtIkRyftpMI051EtSZvYQxGINXN6a53vz039oP4Oq6JE5YbUko_1Wj8VK1818z-wNjiClOYANVT1k7fwNKYyw==";
+
+// Subscribe banner shown inside each daily edition (top, mid, bottom).
+function subscribeBanner(topMargin = 40) {
+  return `<div style="border:1px solid var(--red); background:var(--bg); padding:18px 24px; margin-top:${topMargin}px;
+      display:flex; align-items:center; justify-content:center; flex-wrap:wrap; gap:14px 22px; text-align:center;">
+    <div style="font-family:Helvetica, Arial, sans-serif; font-size:16px; font-weight:700; color:var(--ink);">
+      Get this briefing in your inbox every morning at 6AM. Free. 5 minutes.</div>
+    <a href="${BREVO_SIGNUP_URL}"
+      style="display:inline-block; background:var(--red); color:#F7F3EC; font-family:Helvetica, Arial, sans-serif;
+      font-size:14px; font-weight:700; letter-spacing:1px; text-transform:uppercase; padding:12px 24px;
+      text-decoration:none;">Subscribe Free</a>
+  </div>`;
+}
+
 function escAttr(str) {
   return String(str)
     .replace(/&/g, "&amp;")
@@ -839,9 +856,12 @@ function todayEditionHtml({ dateLabel, volume, greeting, stories, closer, moneyM
       ${greeting ? `<div style="max-width:700px; margin:26px auto 0; font-family:Georgia,'Times New Roman',serif; font-size:18px; line-height:1.75; color:var(--ink); text-align:left;">${greeting}</div>` : ""}
     </div>
 
+    ${subscribeBanner(34)}
+
     <div class="two-col" style="margin-top:40px;">
       <div>
         ${briefings.map(s => briefingBlock(s, issueUrl)).join("\n        ")}
+        ${subscribeBanner(26)}
         <div class="quick-hits-label">The quick ${quickHits.length}</div>
         ${quickHits.map(s => quickHitBlock(s, issueUrl)).join("\n        ")}
       </div>
@@ -855,6 +875,7 @@ function todayEditionHtml({ dateLabel, volume, greeting, stories, closer, moneyM
 
     ${numberBox(theNumber)}
     <div style="margin-top:18px;">${closerBlock(closer, issueUrl)}</div>
+    ${subscribeBanner(28)}
   </div>
   ${footer()}
   <script>
@@ -921,7 +942,7 @@ function landingHtml({ dateLabel, volume, stories, issueUrl }) {
       <h4>Get the Drumbeat in your inbox</h4>
       <p>Five minutes every weekday. No spam. Unsubscribe anytime.</p>
     </div>
-    <a href="https://1a3e105b.sibforms.com/serve/MUIFAIJL5UKBuRKB0t2SMRcCN7dPVIDPS3wraCIqU8bOsCk_66TFY1aS5ovPumAlVJoBIkt2Zlz4Sm1ZQHNhm0siu2bk2mg_JfqsMDb_ZUUMDQ6FFiG9mkYwawb9VGtIkRyftpMI051EtSZvYQxGINXN6a53vz039oP4Oq6JE5YbUko_1Wj8VK1818z-wNjiClOYANVT1k7fwNKYyw==" class="btn-primary" style="margin-top:0;">Subscribe free &rarr;</a>
+    <a href="${BREVO_SIGNUP_URL}" class="btn-primary" style="margin-top:0;">Subscribe free &rarr;</a>
   </div>
   ${footer()}
 </body></html>`;
