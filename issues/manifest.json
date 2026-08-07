@@ -1,5 +1,43 @@
 [
   {
+    "date": "2026-08-07",
+    "dateLabel": "FRIDAY, AUGUST 7, 2026",
+    "volume": "VOL 1 NO 27",
+    "file": "issues/2026-08-07.html",
+    "storyCount": 12,
+    "summary": "First Black Woman Confirmed as CDC Director Amid Health Crises, National Guard D.C. Deployment Extended Through 2029 at $1.4 Billion Cost, SNAP Cuts Disproportionately Hit Black Americans as Work Mandates Tighten, Talarico Pledges $25 Million for Black Voter Mobilization in Texas Senate Race, Stefon Diggs Signs with Washington Commanders, Heads Home to Maryland, D.C. Staffing Company Settles $400K for Denying Workers Paid Sick Leave, Three Charged with Threatening Judge, Officials in Nolan Wells Investigation, UPSHOT League Announces Inaugural Championship for Historic Women's Basketball Season, PVAMU Leads Quantum Information Science Pipeline for Black Students, Trailblazing Journalist Flo Anthony Dies at 74 After Breaking Barriers in Entertainment Reporting, Word In Black Report Explores Racial Healing as Black Americans Grapple with Systemic Racism, Temu and Shein Face Scrutiny Over Toxic Chemicals Threatening Black Consumer Health",
+    "headlines": [
+      "First Black Woman Confirmed as CDC Director Amid Health Crises",
+      "National Guard D.C. Deployment Extended Through 2029 at $1.4 Billion Cost",
+      "SNAP Cuts Disproportionately Hit Black Americans as Work Mandates Tighten",
+      "Talarico Pledges $25 Million for Black Voter Mobilization in Texas Senate Race",
+      "Stefon Diggs Signs with Washington Commanders, Heads Home to Maryland",
+      "D.C. Staffing Company Settles $400K for Denying Workers Paid Sick Leave",
+      "Three Charged with Threatening Judge, Officials in Nolan Wells Investigation",
+      "UPSHOT League Announces Inaugural Championship for Historic Women's Basketball Season",
+      "PVAMU Leads Quantum Information Science Pipeline for Black Students",
+      "Trailblazing Journalist Flo Anthony Dies at 74 After Breaking Barriers in Entertainment Reporting",
+      "Word In Black Report Explores Racial Healing as Black Americans Grapple with Systemic Racism",
+      "Temu and Shein Face Scrutiny Over Toxic Chemicals Threatening Black Consumer Health"
+    ],
+    "slugs": [
+      "erica-schwartz-cdc-director",
+      "erica-schwartz-confirmed-cdc-director",
+      "national_guard_to_continue_washington_dc_deployment_through_2029_costing_14_billion",
+      "national-guard-deployment-to-washington-through-2029-will-cost-roughly-1-4-billion-estimate-shows",
+      "snap-cuts-black-communities",
+      "hunger-by-policy",
+      "james-talarico-texas-black-vote-senate-race-ken-paxton",
+      "stefon-diggs-commanders-sign-wr",
+      "staffing-company-pays-dc-settlement",
+      "3-charged-with-threatening-judge-witness-and-officials-in-nolan-wells-investigation",
+      "upshot-league-announces-inaugural-season-championship",
+      "research-2-2",
+      "longtime-amnews-columnists-flo-anthony-has-died",
+      "racial-healing-black-america-word-in-black-report"
+    ]
+  },
+  {
     "date": "2026-08-06",
     "dateLabel": "THURSDAY, AUGUST 6, 2026",
     "volume": "VOL 1 NO 26",
